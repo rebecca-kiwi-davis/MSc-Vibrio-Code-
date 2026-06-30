@@ -1,30 +1,40 @@
+#1 Setup
+# Check working directory
+getwd()
+
+#Set working directory
+setwd("~/Documents/LSHTM/Thesis/Environmental data")
+
+#2 Load packages
 #loads dplyr for cleaning and ggplot2 for plotting
 library(tidyverse)
 
+#3 Import Data
 #Read case data
 Outcome.Data.Vibrio <- read.csv("Outcome Data Vibrio.csv", stringsAsFactors = FALSE)
 
+#3. clean data
 # drop any row with missing year, month, or area data.
 cleaned_data <- Outcome.Data.Vibrio %>%
   filter(!is.na(Year) & !is.na(Month) & !is.na(area)) %>%
   mutate(
-    #Convert columns safely to numbers to remove any typos and close modification function
+     # Convert columns to numbers to remove any typos
     Year_num  = as.numeric(as.character(Year)),
     Month_num = as.numeric(as.character(Month))
   ) %>%
   filter(Month_num >= 1 & Month_num <= 12) %>%
 
-  # Use a year (2020) to create a one shared 12-month timeline axis
+  # Make a one shared 12-month timeline axis
   mutate(plot_date = make_date(year = 2020, month = Month_num, day = 1)) %>%
   filter(!is.na(plot_date))
 
 
-# combines all years together for each month, by each area
+# combine all years together for each month, by each area
 plot_counts <- cleaned_data %>%
   count(area, plot_date, name = "case_counts")
 
 
-#epicurve creation
+#4 epicurve creation
 
 #Create the plot with month on X axis and cases on Y axis
 epi_curve_plot <- ggplot(plot_counts, aes(x = plot_date, y = case_counts)) +
