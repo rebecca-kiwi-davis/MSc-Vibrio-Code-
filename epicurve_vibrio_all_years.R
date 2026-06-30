@@ -92,4 +92,4 @@ epi_curve_plot <- ggplot(plot_counts, aes(x = plot_date, y = case_counts)) +
 print(epi_curve_plot)
 
 # Export file
-ggsave("vibrio_epi_curves_seasonal_grid.png", width = 22, height = 9, dpi = 300)
+ggsave("epicurve_vibrio_all_years.png", width = 22, height = 9, dpi = 300)
