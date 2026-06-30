@@ -3,7 +3,7 @@
 getwd()
 
 #Set working directory
-setwd("~/Documents/LSHTM/Thesis/Environmental data")
+setwd("~/Documents/LSHTM/Thesis/Environmental data", stringsAsFactors = FALSE)
 
 #2 Packages 
 #Load tidyverse
