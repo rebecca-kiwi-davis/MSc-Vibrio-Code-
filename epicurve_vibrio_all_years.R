@@ -1,15 +1,26 @@
+#1 Setup
+# Check working directory
+getwd()
+
+#Set working directory
+setwd("~/Documents/LSHTM/Thesis/Environmental data")
+
+#2 Packages 
+#Load tidyverse
 library(tidyverse)
 
-# 2. Read CSV file
-Outcome.Data.Vibrio <- read.csv("Outcome Data Vibrio.csv", stringsAsFactors = FALSE)
+#3 Import Data
 
-#clean data
+# 2. Read CSV file
+Outcome.Data.Vibrio <- read.csv("Outcome Data Vibrio.csv")
+
+#3. clean data
 cleaned_data <- Outcome.Data.Vibrio %>%
 
-   # Remove rows with missing crucial variables (year, month, area)
+   # Remove rows with missing variables (year, month, area)
   filter(!is.na(Year) & !is.na(Month) & !is.na(area)) %>%
 
-  # Convert columns safely to numbers to remove any typos and close modification function
+  # Convert columns to numbers to remove any typos
   mutate(
     Year_num  = as.numeric(as.character(Year)),
     Month_num = as.numeric(as.character(Month))
@@ -23,26 +34,26 @@ cleaned_data <- Outcome.Data.Vibrio %>%
 
 #Build Epicurve
 
-# Calculate fresh case counts from the new cleaned data (2026 will be gone)
+# Calculate case counts from the cleaned data
 plot_counts <- cleaned_data %>%
   count(area, Year_num, plot_date, name = "case_counts")
 
-# Create the plot with month on X axis and combined cases on Y axis, by area
+# Create the plot with month on X axis and monthly cases on Y axis, by area
 epi_curve_plot <- ggplot(plot_counts, aes(x = plot_date, y = case_counts)) +
 
-  # Vary the shading of panels depending on month. Light grey (jan-may), light grey (april-june), darker grey (july- sept), light grey (oct-dec)
+  # Change the shade of panels depending on season Light grey (jan-may), light grey (april-june), darker grey (july- sept), light grey (oct-dec)
   geom_rect(aes(xmin = make_date(2020, 1, 1), xmax = make_date(2020, 3, 31), ymin = -Inf, ymax = Inf), fill = "gray96") +
   geom_rect(aes(xmin = make_date(2020, 4, 1), xmax = make_date(2020, 6, 30), ymin = -Inf, ymax = Inf), fill = "gray86") +
   geom_rect(aes(xmin = make_date(2020, 7, 1), xmax = make_date(2020, 9, 30), ymin = -Inf, ymax = Inf), fill = "gray70") + # Summer Focus
   geom_rect(aes(xmin = make_date(2020, 10, 1), xmax = make_date(2020, 12, 31), ymin = -Inf, ymax = Inf), fill = "gray86") + # Autumn
 
-  # Monthly timeline data bars in blue to stand out
+  # Make monthly timeline data bars blue 
   geom_col(fill = "steelblue", width = 25) +
 
-  # 15 panels grid matrix. Splits panels into regions as rows, and years as columns.
+  # Show a 15 panels grid matrix. Split panels into regions as rows, and years as columns.
   facet_grid(rows = vars(area), cols = vars(Year_num), scales = "free_y") +
 
-  # Filters labels to seasons - Jan, Apr, Jul, Oct
+  # Limit labels to be the start of seasons - Jan, Apr, Jul, Oct
   scale_x_date(
     breaks = make_date(2020, c(1, 4, 7, 10), 1),
     labels = c("Jan", "Apr", "Jul", "Oct"),
@@ -52,12 +63,12 @@ epi_curve_plot <- ggplot(plot_counts, aes(x = plot_date, y = case_counts)) +
   # layout style with white background
   theme_bw() +
 
-  # Rotate text to see all and adjust size
+  # Rotate text on X axis to see all titles and adjust size
   theme(
     axis.text.x = element_text(angle = 45, hjust = 1, size = 8, color = "black"),
     axis.text.y = element_text(size = 8, color = "black"),
 
-    # Formats the titles (cities) on the side to look horizontal, large, and prominent
+    # Format the area titles on the side to look horizontal and large
     strip.text.x = element_text(face = "bold", size = 10),
     strip.text.y = element_text(face = "bold", size = 12, color = "black", angle = 0),
     strip.background.y = element_rect(fill = "gray90", color = "gray70"),
@@ -65,11 +76,11 @@ epi_curve_plot <- ggplot(plot_counts, aes(x = plot_date, y = case_counts)) +
     panel.grid.major.x = element_blank(),
     panel.grid.minor.x = element_blank(),
 
-    # Formats the caption underneath to be left-aligned and legible
+    # Format the caption underneath to be on the left
     plot.caption = element_text(hjust = 0, size = 10, face = "plain", margin = margin(t = 15))
   ) +
 
-  # Labels and Caption updated to reflect a 2010–2025 timeline
+  # Label and caption added
   labs(
     title = "Locally Acquired Cases of Non-Cholera Vibrio by Month of Admission, Cádiz, Charente-Maritime, and Stockholm (2010–2025)",
     x = "Month of Onset",
@@ -77,8 +88,8 @@ epi_curve_plot <- ggplot(plot_counts, aes(x = plot_date, y = case_counts)) +
     caption = "Figure 1: Date of non-cholera Vibrio case admission (mostly hospital) notified between 2010 and 2025.\nShading of background panels define four seasons (Dark grey field = July–September, summer risk peak)."
   )
 
-# Display final plot
+# Final plot
 print(epi_curve_plot)
 
-# Export as your file
+# Export file
 ggsave("vibrio_epi_curves_seasonal_grid.png", width = 22, height = 9, dpi = 300)
