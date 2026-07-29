@@ -554,7 +554,7 @@ for (current_area in unique_areas) {
     sss_final$sst_scaled_vector <- as.numeric(scale(sst_final[[v_sst]]))
     sss_final$sss_scaled_vector <- as.numeric(scale(sss_final[[v_sss]]))
     
-    # Run Track 1: SST Threshold model adjusting for scaled continuous salinity
+    # 1. SST Threshold model adjusting for scaled continuous salinity
     mod_sst   <- clogit(isb ~ SST_threshold_var + sss_scaled_vector + strata(id), data = sss_final)
     sum_sst   <- summary(mod_sst)$coefficients
     b_sst     <- sum_sst[1, "coef"]
@@ -570,7 +570,7 @@ for (current_area in unique_areas) {
       OR = exp(b_sst), lower = exp(b_sst - 1.96*se_sst), upper = exp(b_sst + 1.96*se_sst)
     ))
     
-    # Run Track 2: Standardised Continuous Salinity model adjusted for scaled continuous temperature
+    # 2. Standardised Continuous Salinity model adjusted for scaled continuous temperature
     mod_sss   <- clogit(isb ~ sss_scaled_vector + sst_scaled_vector + strata(id), data = sss_final)
     sum_sss   <- summary(mod_sss)$coefficients
     b_sss     <- sum_sss[1, "coef"]
