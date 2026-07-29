@@ -203,12 +203,12 @@ cc_data <- cc_data %>%
 
 # 2. Get counts and percentages of cases split by Area and Temperature Category
 cc_data %>%
-  filter(isb == 1) %>% 
+  filter(isb == 1) %>%
   group_by(area, SST_cat) %>%
   summarise(Cases = n(), .groups = 'drop_last') %>%
   mutate(Percentage = (Cases / sum(Cases)) * 100)
 
-#majority of cases occur over 18°C in all areas. 
+#majority of cases occur over 18°C in all areas.
 
 #B. SSS and Pmean
 
@@ -224,14 +224,14 @@ cc_data <- cc_data %>%
 
 print("SSSmean")
 cc_data %>%
-  filter(isb == 1) %>% 
+  filter(isb == 1) %>%
   group_by(area, SSS_cat) %>%
   summarise(Cases = n(), .groups = 'drop_last') %>%
   mutate(Percentage = (Cases / sum(Cases)) * 100)
 
 print("Pmean")
 cc_data %>%
-  filter(isb == 1) %>% 
+  filter(isb == 1) %>%
   group_by(area, Pmean) %>%
   summarise(Cases = n(), .groups = 'drop_last') %>%
   mutate(Percentage = (Cases / sum(Cases)) * 100)
@@ -324,41 +324,41 @@ format_p_value <- function(p) {
 # 4. Run loop for each variable and lag combination
 for (config in variable_configs) {
   for (current_lag in lags_to_test) {
-    
+
     # Clean column matching logic for lag 0 vs historical lags
     target_column <- if(current_lag == 0) config$base_name else paste0(config$base_name, "_lag_", current_lag)
-    
+
     # Filter complete entries for this specific metric
     sub_data <- cc_data_lags %>%
       filter(!is.na(.data[[target_column]]))
-    
+
     # Verify pairing case-control cross variance
     valid_strata <- sub_data %>%
       group_by(area, id) %>%
       summarise(has_match = any(isb == 1) & any(isb == 0), .groups = "drop") %>%
       filter(has_match)
-    
+
     final_subset <- sub_data %>%
       inner_join(valid_strata, by = c("area", "id"))
-    
+
     if (nrow(final_subset) < 10) next
-    
+
     # show cases used by the model
     actual_cases <- sum(final_subset$isb == 1, na.rm = TRUE)
 
     formula_obj <- reformulate(c(target_column, "strata(interaction(id, area))"), response = "isb")
-    
+
     tryCatch({
       mod_run <- clogit(formula_obj, data = final_subset)
       sum_run <- summary(mod_run)$coefficients
-      
+
       b     <- sum_run[target_column, "coef"]
       se    <- sum_run[target_column, "se(coef)"]
       p_raw <- sum_run[target_column, "Pr(>|z|)"]
-      
+
       or          <- paste0(round(exp(b), 2), " (", round(exp(b - 1.96*se), 2), ", ", round(exp(b + 1.96*se), 2), ")")
       p_formatted <- format_p_value(p_raw)
-      
+
       screening_results <- rbind(screening_results, data.frame(
         Parameter = config$label,
         Lag       = paste0("Lag ", current_lag),
@@ -374,19 +374,19 @@ for (config in variable_configs) {
 
 # 5. Make word doc of outputs
 ft_screen_table <- flextable(screening_results %>% select(-sig)) %>%
-  font(fontname = "Times New Roman", part = "all") %>% 
-  fontsize(size = 11, part = "all") %>% 
+  font(fontname = "Times New Roman", part = "all") %>%
+  fontsize(size = 11, part = "all") %>%
   bold(part = "header") %>%
-  align(align = "center", j = c("Lag", "Cases", "OR_CI", "P_Value"), part = "all") %>% 
+  align(align = "center", j = c("Lag", "Cases", "OR_CI", "P_Value"), part = "all") %>%
   align(align = "left", j = c("Parameter"), part = "all") %>%
-  merge_v(j = c("Parameter", "Cases")) %>% 
+  merge_v(j = c("Parameter", "Cases")) %>%
   border_remove() %>%
-  hline_top(border = fp_border(color = "black", width = 1.5)) %>% 
-  hline_bottom(border = fp_border(color = "black", width = 1.5)) %>% 
+  hline_top(border = fp_border(color = "black", width = 1.5)) %>%
+  hline_bottom(border = fp_border(color = "black", width = 1.5)) %>%
   hline(border = fp_border(color = "gray80", width = 0.5)) %>%
-  set_header_labels(Parameter = "Environmental Exposure Parameter", Lag = "Exposure Lag", 
+  set_header_labels(Parameter = "Environmental Exposure Parameter", Lag = "Exposure Lag",
                     Cases = "Total Cases (N)", OR_CI = "Crude Odds Ratio (95% CI)", P_Value = "p-value") %>%
-  bold(i = which(screening_results$sig), j = c("OR_CI", "P_Value")) %>% 
+  bold(i = which(screening_results$sig), j = c("OR_CI", "P_Value")) %>%
   autofit()
 
 doc_output <- read_docx() %>%
@@ -412,35 +412,35 @@ library(dplyr)
 library(officer)
 library(flextable)
 
-#1
-daily_sst_clean <- cc_master_sst %>%
-  distinct(area, date, SST = SST_lag0, Tmean, Pmean, Rmean)
+# Extract data
+daily_sst_clean <- cc_data %>%
+  distinct(area, date, SST = SSTmean, Tmean, Pmean, Rmean)
 
-daily_sss_clean <- cc_master_sss %>%
-  distinct(area, date, SSS = SSS_lag0)
+daily_sss_clean <- cc_data %>%
+  distinct(area, date, SSS = SSSmean)
 
 weather_correlation_matrix <- daily_sst_clean %>%
   inner_join(daily_sss_clean, by = c("area", "date")) %>%
   select(SST, SSS, Tmean, Pmean, Rmean) %>%
   na.omit()
 
-#2. Spearman Rank
+#2. Spearman Rank test
 cor_matrix_output <- cor(weather_correlation_matrix, method = "spearman")
 
-# Format into a full, unmasked data frame grid
+# Format
 cor_df <- as.data.frame(round(cor_matrix_output, 3))
 cor_df <- cbind(Variable = rownames(cor_df), cor_df)
 
 #3. word doc
 ft_cor_table <- flextable(cor_df) %>%
-  font(fontname = "Times New Roman", part = "all") %>% 
-  fontsize(size = 11, part = "all") %>% 
+  font(fontname = "Times New Roman", part = "all") %>%
+  fontsize(size = 11, part = "all") %>%
   bold(part = "header") %>%
-  align(align = "center", j = c("SST", "SSS", "Tmean", "Pmean", "Rmean"), part = "all") %>% 
+  align(align = "center", j = c("SST", "SSS", "Tmean", "Pmean", "Rmean"), part = "all") %>%
   align(align = "left", j = "Variable", part = "all") %>%
   border_remove() %>%
-  hline_top(border = fp_border(color = "black", width = 1.5)) %>% 
-  hline_bottom(border = fp_border(color = "black", width = 1.5)) %>% 
+  hline_top(border = fp_border(color = "black", width = 1.5)) %>%
+  hline_bottom(border = fp_border(color = "black", width = 1.5)) %>%
   hline(border = fp_border(color = "gray80", width = 0.5)) %>%
   set_header_labels(
     Variable = "Environmental Metric",
@@ -453,7 +453,7 @@ ft_cor_table <- flextable(cor_df) %>%
   bold(i = 3, j = "Rmean") %>% # Tmean vs Rmean
   autofit()
 
-# word file
+# download word file
 doc_output <- read_docx() %>%
   body_add_par("Table A.1: Full Spearman Rank Correlation Matrix of Secondary Atmospheric and Proximal Marine Exposure Covariates", style = "heading 1") %>%
   body_add_flextable(ft_cor_table) %>%
@@ -474,39 +474,35 @@ library(ggplot2)
 library(officer)
 library(flextable)
 
-# A. Use SST and SSS from CC paired data
-daily_weather_sst <- cc_master_sst %>% distinct(area, date, SST_raw = SST_lag0)
-daily_weather_sss <- cc_master_sss %>% distinct(area, date, SSS_raw = SSS_lag0)
-
-# B. Combine datasets and arrange strictly by calendar date to calculate lags
-continuous_weather <- daily_weather_sst %>%
-  inner_join(daily_weather_sss, by = c("area", "date")) %>%
+# Apply lags 0-3
+continuous_weather <- cc_data %>%
+  distinct(area, date, SST = SSTmean, SSS = SSSmean) %>%
   arrange(area, date) %>%
   group_by(area) %>%
   mutate(
-    SST_lag0_new = SST_raw,
-    SST_lag1_new = dplyr::lag(SST_raw, n = 1),
-    SST_lag2_new = dplyr::lag(SST_raw, n = 2),
-    SST_lag3_new = dplyr::lag(SST_raw, n = 3),
-    
-    SSS_lag0_new = SSS_raw,
-    SSS_lag1_new = dplyr::lag(SSS_raw, n = 1),
-    SSS_lag2_new = dplyr::lag(SSS_raw, n = 2),
-    SSS_lag3_new = dplyr::lag(SSS_raw, n = 3)
+    SST_lag0_new = SST,
+    SST_lag1_new = dplyr::lag(SST, n = 1),
+    SST_lag2_new = dplyr::lag(SST, n = 2),
+    SST_lag3_new = dplyr::lag(SST, n = 3),
+
+    SSS_lag0_new = SSS,
+    SSS_lag1_new = dplyr::lag(SSS, n = 1),
+    SSS_lag2_new = dplyr::lag(SSS, n = 2),
+    SSS_lag3_new = dplyr::lag(SSS, n = 3)
   ) %>%
   ungroup() %>%
-  select(-SST_raw, -SSS_raw)
+  select(-SST, -SSS)
 
-# C. Map environmental lags directly to cases
-cc_clean_sst <- cc_master_sst %>% select(id, area, isb, date) %>% left_join(continuous_weather, by = c("area", "date"))
-cc_clean_sss <- cc_master_sss %>% select(id, area, isb, date) %>% left_join(continuous_weather, by = c("area", "date"))
+# Map environmental lags directly to cases
+cc_clean_matched <- cc_data %>%
+  select(id, area, isb, date) %>%
+  left_join(continuous_weather, by = c("area", "date"))
 
-#2. LOOP, RUN REGRESSIONS, AND EXTRACT CALCULATION MATRIX
-
+# 2. Loop, run regressions 0-3 for each area
 target_lags       <- c("lag0", "lag1", "lag2", "lag3")
 unique_areas      <- c("cadiz", "charente-maritime", "stockholm")
 two_model_results <- data.frame()
-forest_results    <- data.frame() 
+forest_results    <- data.frame()
 
 format_p <- function(p) {
   if (is.na(p)) return("-")
@@ -516,97 +512,69 @@ format_p <- function(p) {
 
 for (current_area in unique_areas) {
   for (lag_name in target_lags) {
-    
-    # Identify variables for this loop 
+
     v_sst <- paste0("SST_", lag_name, "_new")
     v_sss <- paste0("SSS_", lag_name, "_new")
-    
+
     # Filter out missing data
-    sst_subset <- cc_clean_sst %>% filter(area == current_area & !is.na(.data[[v_sst]]) & !is.na(id))
-    sss_subset <- cc_clean_sss %>% filter(area == current_area & !is.na(.data[[v_sss]]) & !is.na(id))
-    
-    # Match Cases and controls 
-    common_ids <- intersect(sst_subset$id, sss_subset$id)
-    sst_final  <- sst_subset %>% filter(id %in% common_ids) %>% arrange(id, isb)
-    sss_final  <- sss_subset %>% filter(id %in% common_ids) %>% arrange(id, isb)
-    
-    # Delete unpaired data
-    valid_ids <- sss_final %>%
-      group_by(id) %>% summarise(has_match = any(isb == 1) & any(isb == 0), .groups = "drop") %>%
-      filter(has_match) %>% pull(id)
-    
-    sst_final <- sst_final %>% filter(id %in% valid_ids)
-    sss_final <- sss_final %>% filter(id %in% valid_ids)
-    if (nrow(sss_final) < 10) next
-    
+    model_subset <- cc_clean_matched %>%
+      filter(area == current_area & !is.na(.data[[v_sst]]) & !is.na(.data[[v_sss]]) & !is.na(id)) %>%
+      group_by(id) %>%
+      filter(any(isb == 1) & any(isb == 0)) %>%
+      ungroup()
+
+    if (nrow(model_subset) < 10) next
+
     # Define populations
-    if (current_area == "cadiz") current_case_count <- 166
-    if (current_area == "charente-maritime") current_case_count <- 39
-    if (current_area == "stockholm") current_case_count <- 36
-    
-    # LAYOUT:
+    actual_case_count <- sum(model_subset$isb == 1, na.rm = TRUE)
+
+    # layout
     # 1. SST threshold vector tracking continuous values above 18°C
-    sss_final$SST_threshold_var <- pmax(sst_final[[v_sst]] - 18, 0)
+    model_subset$SST_threshold_var <- pmax(model_subset[[v_sst]] - 18, 0)
     # 2. Localized continuous standardized variables (Z-Scores)
-    sss_final$sst_scaled_vector <- as.numeric(scale(sst_final[[v_sst]]))
-    sss_final$sss_scaled_vector <- as.numeric(scale(sss_final[[v_sss]]))
-    
-    # Run Track 1: SST Threshold model adjusting for scaled continuous salinity
-    mod_sst   <- clogit(isb ~ SST_threshold_var + sss_scaled_vector + strata(id), data = sss_final)
+    model_subset$sst_scaled_vector <- as.numeric(scale(model_subset[[v_sst]]))
+    model_subset$sss_scaled_vector <- as.numeric(scale(model_subset[[v_sss]]))
+
+    # SST adjusting for SSS
+    mod_sst   <- clogit(isb ~ SST_threshold_var + sss_scaled_vector + strata(id), data = model_subset)
     sum_sst   <- summary(mod_sst)$coefficients
-    b_sst     <- sum_sst[1, "coef"]
-    se_sst    <- sum_sst[1, "se(coef)"]
-    p_sst_val <- sum_sst[1, "Pr(>|z|)"]
-    
+    b_sst     <- sum_sst["SST_threshold_var", "coef"]
+    se_sst    <- sum_sst["SST_threshold_var", "se(coef)"]
+    p_sst_val <- sum_sst["SST_threshold_var", "Pr(>|z|)"]
+
     or_sst_txt <- paste0(round(exp(b_sst), 2), " (", round(exp(b_sst - 1.96*se_sst), 2), ", ", round(exp(b_sst + 1.96*se_sst), 2), ")")
     p_sst_txt  <- format_p(p_sst_val)
-    
-    #  parameters for the continuous forest figure 
+
+    # forest plot
     forest_results <- rbind(forest_results, data.frame(
       Region = toupper(current_area), Lag = toupper(lag_name), Variable = "SST (>18°C Threshold per 1°C increase)",
       OR = exp(b_sst), lower = exp(b_sst - 1.96*se_sst), upper = exp(b_sst + 1.96*se_sst)
     ))
-    
-    # Run Track 2: Standardised Continuous Salinity model adjusted for scaled continuous temperature
-    mod_sss   <- clogit(isb ~ sss_scaled_vector + sst_scaled_vector + strata(id), data = sss_final)
+
+    # SSS controlling for SST
+    mod_sss   <- clogit(isb ~ sss_scaled_vector + sst_scaled_vector + strata(id), data = model_subset)
     sum_sss   <- summary(mod_sss)$coefficients
-    b_sss     <- sum_sss[1, "coef"]
-    se_sss    <- sum_sss[1, "se(coef)"]
-    p_sss_val <- sum_sss[1, "Pr(>|z|)"]
-    
+    b_sss     <- sum_sss["sss_scaled_vector", "coef"]
+    se_sss    <- sum_sss["sss_scaled_vector", "se(coef)"]
+    p_sss_val <- sum_sss["sss_scaled_vector", "Pr(>|z|)"]
+
     or_sss_txt <- paste0(round(exp(b_sss), 2), " (", round(exp(b_sss - 1.96*se_sss), 2), ", ", round(exp(b_sss + 1.96*se_sss), 2), ")")
     p_sss_txt  <- format_p(p_sss_val)
-    
-    #  parameters for the continuous forest figure mapping
+
+    # parameters for forest plot
     forest_results <- rbind(forest_results, data.frame(
       Region = toupper(current_area), Lag = toupper(lag_name), Variable = "Salinity (Continuous per 1 SD change)",
       OR = exp(b_sss), lower = exp(b_sss - 1.96*se_sss), upper = exp(b_sss + 1.96*se_sss)
     ))
-    
-    # Compile data frame rows cleanly 
-    sst_row <- data.frame(Region = toupper(current_area), Lag = toupper(lag_name), Cases = current_case_count, Variable = "SST (>18°C)", OR = or_sst_txt, P = p_sst_txt, sig = p_sst_val < 0.05)
-    sss_row <- data.frame(Region = toupper(current_area), Lag = toupper(lag_name), Cases = current_case_count, Variable = "Salinity (Continuous 1 SD)", OR = or_sss_txt, P = p_sss_txt, sig = p_sss_val < 0.05)
+
+    #
+    sst_row <- data.frame(Region = toupper(current_area), Lag = toupper(lag_name), Cases = actual_case_count, Variable = "SST (>18°C)", OR = or_sst_txt, P = p_sst_txt, sig = p_sst_val < 0.05)
+    sss_row <- data.frame(Region = toupper(current_area), Lag = toupper(lag_name), Cases = actual_case_count, Variable = "Salinity (Continuous 1 SD)", OR = or_sss_txt, P = p_sss_txt, sig = p_sss_val < 0.05)
     two_model_results <- rbind(two_model_results, sst_row, sss_row)
   }
 }
 
-#define a 1 unit SD change for SSS for each area
-
-library(dplyr)
-
-# Calculate the exact average and 1 SD spread for Sea Surface Salinity
-regional_salinity_metrics <- cc_master_pmean %>% # or your master data file
-  group_by(area) %>%
-  summarise(
-    Average_Salinity_PSU = round(mean(SSSmean, na.rm = TRUE), 2),
-    One_SD_Value_PSU     = round(sd(SSSmean, na.rm = TRUE), 2)
-  ) %>%
-  ungroup()
-
-print(regional_salinity_metrics)
-
-#3 make forest plot 
-
+# 3 make forest plot
 cat("\nGenerating and saving continuous forest plot...\n")
 
 forest_results$Lag <- factor(forest_results$Lag, levels = rev(c("LAG0", "LAG1", "LAG2", "LAG3")))
@@ -631,8 +599,7 @@ p_master_forest <- ggplot(forest_results, aes(x = OR, y = Lag, xmin = lower, xma
 
 ggsave("MSc_Thesis_Figure_Continuous_Standardized_ForestPlot.png", plot = p_master_forest, width = 10, height = 7, dpi = 300)
 
-#4. Word output table of lags and odds.
-
+# 4. Word output table of lags and odds.
 ft_table <- flextable(two_model_results %>% select(-sig)) %>%
   font(fontname = "Times New Roman", part = "all") %>%
   fontsize(size = 11, part = "all") %>%
@@ -660,105 +627,7 @@ print(doc_output, target = "MSc_Thesis_Table_TwoModel_Results.docx")
 cat("\nSuccess! Saved your main threshold regression table and forest plot to your directory.\n")
 
 #@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@
-# 11. GAM plots to show interaction between SST and SSS
-#@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@
-
-library(mgcv)
-#using most significant lag day for each area 
-
-# CADIZ (LAG 1) 
-cadiz_sst <- cc_master_sst %>% filter(area == "cadiz") %>% mutate(SST_var = lag(SST_lag0, 1))
-cadiz_sss <- cc_master_sss %>% filter(area == "cadiz") %>% mutate(SSS_var = lag(SSS_lag0, 1))
-cadiz_ids <- intersect(cadiz_sst$id, cadiz_sss$id)
-
-cadiz_data <- cadiz_sss %>% filter(id %in% cadiz_ids) %>% arrange(id, isb)
-cadiz_data$SST_raw <- (cadiz_sst %>% filter(id %in% cadiz_ids) %>% arrange(id, isb))$SST_var
-
-model_cadiz <- gam(isb ~ te(SST_raw, SSS_var, k = 3) + s(id, bs = "re"), 
-                   data = cadiz_data, family = binomial, method = "REML")
-
-grid_cadiz <- expand.grid(
-  SST = seq(min(cadiz_data$SST_raw, na.rm=T), max(cadiz_data$SST_raw, na.rm=T), length.out = 100),
-  Salinity = seq(min(cadiz_data$SSS_var, na.rm=T), max(cadiz_data$SSS_var, na.rm=T), length.out = 100)
-)
-grid_cadiz$lp <- predict(model_cadiz, newdata = data.frame(SST_raw = grid_cadiz$SST, SSS_var = grid_cadiz$Salinity, id = cadiz_data$id[1]), type = "link")
-grid_cadiz$OR <- exp(grid_cadiz$lp - mean(grid_cadiz$lp))
-
-
-#CHARENTE-MARITIME (LAG 3)
-cm_sst <- cc_master_sst %>% filter(area == "charente-maritime") %>% mutate(SST_var = lag(SST_lag0, 3))
-cm_sss <- cc_master_sss %>% filter(area == "charente-maritime") %>% mutate(SSS_var = lag(SSS_lag0, 3))
-cm_ids <- intersect(cm_sst$id, cm_sss$id)
-
-cm_data <- cm_sss %>% filter(id %in% cm_ids) %>% arrange(id, isb)
-cm_data$SST_raw <- (cm_sst %>% filter(id %in% cm_ids) %>% arrange(id, isb))$SST_var
-
-# FIX: Added method = "REML"
-model_cm <- gam(isb ~ te(SST_raw, SSS_var, k = 3) + s(id, bs = "re"), 
-                data = cm_data, family = binomial, method = "REML")
-
-grid_cm <- expand.grid(
-  SST = seq(min(cm_data$SST_raw, na.rm=T), max(cm_data$SST_raw, na.rm=T), length.out = 100),
-  Salinity = seq(min(cm_data$SSS_var, na.rm=T), max(cm_data$SSS_var, na.rm=T), length.out = 100)
-)
-grid_cm$lp <- predict(model_cm, newdata = data.frame(SST_raw = grid_cm$SST, SSS_var = grid_cm$Salinity, id = cm_data$id[1]), type = "link")
-grid_cm$OR <- exp(grid_cm$lp - mean(grid_cm$lp))
-
-
-# STOCKHOLM (LAG 2) 
-stkh_sst <- cc_master_sst %>% filter(area == "stockholm") %>% mutate(SST_var = lag(SST_lag0, 2))
-stkh_sss <- cc_master_sss %>% filter(area == "stockholm") %>% mutate(SSS_var = lag(SSS_lag0, 2))
-stkh_ids <- intersect(stkh_sst$id, stkh_sss$id)
-
-stkh_data <- stkh_sss %>% filter(id %in% stkh_ids) %>% arrange(id, isb)
-stkh_data$SST_raw <- (stkh_sst %>% filter(id %in% stkh_ids) %>% arrange(id, isb))$SST_var
-
-# FIX: Added method = "REML"
-model_stkh <- gam(isb ~ te(SST_raw, SSS_var, k = 3) + s(id, bs = "re"), 
-                  data = stkh_data, family = binomial, method = "REML")
-
-grid_stkh <- expand.grid(
-  SST = seq(min(stkh_data$SST_raw, na.rm=T), max(stkh_data$SST_raw, na.rm=T), length.out = 100),
-  Salinity = seq(min(stkh_data$SSS_var, na.rm=T), max(stkh_data$SSS_var, na.rm=T), length.out = 100)
-)
-grid_stkh$lp <- predict(model_stkh, newdata = data.frame(SST_raw = grid_stkh$SST, SSS_var = grid_stkh$Salinity, id = stkh_data$id[1]), type = "link")
-grid_stkh$OR <- exp(grid_stkh$lp - mean(grid_stkh$lp))
-
-
-#creation of GAM plot
-
-library(ggplot2)
-
-render_gam_surface <- function(grid_data, title_text, filename_text) {
-  grid_data$OR_capped <- ifelse(grid_data$OR > 20, 20.1, grid_data$OR)
-  grid_data$OR_group  <- cut(grid_data$OR_capped,
-                             breaks = c(0, 1.0, 1.5, 2.0, 3.0, 5.0, 7.0, 10.0, 15.0, 20.0, Inf),
-                             labels = c("(0.0, 1.0]", "(1.0, 1.5]", "(1.5, 2.0]", "(2.0, 3.0]",
-                                        "(3.0, 5.0]", "(5.0, 7.0]", "(7.0, 10.0]", "(10.0, 15.0]",
-                                        "(15.0, 20.0]", "(20.0, Inf]"), include.lowest = TRUE)
-  
-  p <- ggplot(grid_data, aes(x = Salinity, y = SST)) +
-    geom_tile(aes(fill = OR_group)) +
-    scale_fill_viridis_d(option = "magma", name = "Predicted OR", drop = TRUE) + 
-    scale_x_reverse() +
-    labs(title = title_text, x = "Salinity (psu) — Decreasing →", y = "SST (°C)") +
-    theme_bw() + 
-    theme(panel.grid.major = element_blank(), panel.grid.minor = element_blank(),
-          plot.title = element_text(face = "bold", size = 11))
-  
-  ggsave(filename = filename_text, plot = p, width = 6, height = 5, dpi = 300)
-}
-
-# Overwriting your images with correct lag text descriptions
-render_gam_surface(grid_cadiz, "A  CADIZ (Lag 1) — Smooth Bivariate GAM Surface", "GAM_Surface_Cadiz.png")
-render_gam_surface(grid_cm, "B  CHARENTE-MARITIME (Lag 0) — Smooth Bivariate GAM Surface", "GAM_Surface_Charente_Maritime.png")
-render_gam_surface(grid_stkh, "C  STOCKHOLM (Lag 3) — Smooth Bivariate GAM Surface", "GAM_Surface_Stockholm.png")
-
-cat("\nDone! All three final plots re-saved with matching lag titles.\n")
-
-#___________________________________________________________________________
-#@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@
-# 13. Pmean Logistic Model, Case-Crossover Design: Tables and Plots
+# 13. Precipitation Logistic Model, Case-Crossover Design: Tables and Plots
 #@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@
 
 # 1. Load libraries
@@ -768,8 +637,8 @@ library(ggplot2)
 library(officer)
 library(flextable)
 
-# 2. Lags 
-continuous_weather <- cc_master_pmean %>% 
+# 2. Lags
+continuous_weather <- cc_data %>%
   distinct(area, date, Pmean) %>%
   arrange(area, date) %>%
   group_by(area) %>%
@@ -783,15 +652,15 @@ continuous_weather <- cc_master_pmean %>%
   select(-Pmean)
 
 # Map lags to cases
-cc_clean_pmean <- cc_master_pmean %>% 
-  select(id, area, isb, date) %>% 
+cc_clean_pmean <- cc_data %>%
+  select(id, area, isb, date) %>%
   left_join(continuous_weather, by = c("area", "date"))
 
 # 3. Loops, data outputs
 target_lags         <- c("lag0", "lag1", "lag2", "lag3")
 unique_areas        <- c("cadiz", "charente-maritime", "stockholm")
 pmean_model_results <- data.frame()
-forest_results      <- data.frame() 
+forest_results      <- data.frame()
 
 format_p <- function(p) {
   if (is.na(p)) return("-")
@@ -802,49 +671,49 @@ format_p <- function(p) {
 # 4. Run Stratified lag loops across regions
 for (current_area in unique_areas) {
   for (lag_name in target_lags) {
-    
+
     target_var <- paste0("Pmean_", lag_name)
-    
+
     # keep only fully-matched case-control strata
-    pmean_final <- cc_clean_pmean %>% 
+    pmean_final <- cc_clean_pmean %>%
       filter(area == current_area & !is.na(.data[[target_var]]) & !is.na(id)) %>%
-      group_by(id) %>% 
-      filter(any(isb == 1) & any(isb == 0)) %>% 
+      group_by(id) %>%
+      filter(any(isb == 1) & any(isb == 0)) %>%
       ungroup()
-    
+
     if (nrow(pmean_final) < 10) next
-    
-    #  count cases 
+
+    #  count cases
     actual_case_count <- sum(pmean_final$isb == 1, na.rm = TRUE)
-    
+
     # use per 1 SD change
     pmean_final$scaled_pmean <- as.numeric(scale(pmean_final[[target_var]]))
-    
+
     # Fit Conditional Logistic Regression Model
     mod_pmean <- clogit(isb ~ scaled_pmean + strata(id), data = pmean_final)
     sum_pmean <- summary(mod_pmean)$coefficients
-    
+
     b_pmean   <- sum_pmean["scaled_pmean", "coef"]
     se_pmean  <- sum_pmean["scaled_pmean", "se(coef)"]
     p_raw     <- sum_pmean["scaled_pmean", "Pr(>|z|)"]
-    
+
     # Calculate Estimates
     or_val    <- exp(b_pmean)
     ci_lower  <- exp(b_pmean - 1.96 * se_pmean)
     ci_upper  <- exp(b_pmean + 1.96 * se_pmean)
-    
+
     or_txt    <- paste0(round(or_val, 2), " (", round(ci_lower, 2), ", ", round(ci_upper, 2), ")")
     p_txt     <- format_p(p_raw)
-    
+
     # Plotting
     forest_results <- rbind(forest_results, data.frame(
-      Region = toupper(current_area), Lag = toupper(lag_name), 
+      Region = toupper(current_area), Lag = toupper(lag_name),
       OR = or_val, lower = ci_lower, upper = ci_upper
     ))
-    
+
     # Word Table
     pmean_model_results <- rbind(pmean_model_results, data.frame(
-      Region = toupper(current_area), Lag = toupper(lag_name), Cases = actual_case_count, 
+      Region = toupper(current_area), Lag = toupper(lag_name), Cases = actual_case_count,
       Variable = "Pmean (Continuous 1 SD)", OR = or_txt, P = p_txt, sig = p_raw < 0.05
     ))
   }
@@ -880,7 +749,7 @@ ft_table <- flextable(pmean_model_results %>% select(-sig)) %>%
   hline_top(border = fp_border(color = "black", width = 1.5)) %>%
   hline_bottom(border = fp_border(color = "black", width = 1.5)) %>%
   hline(border = fp_border(color = "gray80", width = 0.5)) %>%
-  set_header_labels(Region = "Study Region", Lag = "Lag Window", Cases = "Cases (N)", 
+  set_header_labels(Region = "Study Region", Lag = "Lag Window", Cases = "Cases (N)",
                     Variable = "Exposure Parameter", OR = "Odds Ratio (95% CI)", P = "p-value") %>%
   bold(i = which(pmean_model_results$sig), j = c("OR", "P")) %>%
   autofit()
@@ -888,21 +757,18 @@ ft_table <- flextable(pmean_model_results %>% select(-sig)) %>%
 doc_output <- read_docx() %>%
   body_add_par("Table X.X: Stratified Single-Variable Case-Crossover Odds Ratios for Precipitation Across Lags", style = "heading 1") %>%
   body_add_flextable(ft_table) %>%
-  body_add_par("\nNote: Bold entries indicate statistical significance at the p < 0.05 level.", style = "Normal") %>%
+  body_add_par("\nNote: .", style = "Normal") %>%
   body_add_par("1. Pmean variables are locally standardized to a continuous Z-score scale representing risk change per 1 Standard Deviation (SD) increase.", style = "Normal")
 
 print(doc_output, target = "MSc_Thesis_Table_Pmean_Only_Results.docx")
 
-# 
-print(p_master_forest)
-ft_table
 
 #Define how much a 1SD change in pmean is for each area
 
 library(dplyr)
 
 # Calculate the exact average and 1 SD in millimetres for your dataset
-regional_rainfall_metrics <- cc_master_pmean %>%
+regional_rainfall_metrics <- cc_data %>%
   group_by(area) %>%
   summarise(
     Average_Rain_mm   = round(mean(Pmean, na.rm = TRUE), 2),
@@ -912,3 +778,252 @@ regional_rainfall_metrics <- cc_master_pmean %>%
 
 print(regional_rainfall_metrics)
 
+#SST, SSS, and Pmean in same model
+
+#@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@
+# Fully Adjusted Model (SST + SSS + Pmean)
+#@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@
+
+library(dplyr)
+library(survival)
+library(officer)
+library(flextable)
+
+# 1. Combine all (SST, SSS, and Pmean) and align lags from cc_data
+weather_triple <- cc_data %>%
+  distinct(area, date, SST = SSTmean, SSS = SSSmean, Pmean_raw = Pmean) %>%
+  arrange(area, date) %>%
+  group_by(area) %>%
+  mutate(
+    SST_lag0_new = SST, SST_lag1_new = dplyr::lag(SST, n = 1), SST_lag2_new = dplyr::lag(SST, n = 2), SST_lag3_new = dplyr::lag(SST, n = 3),
+    SSS_lag0_new = SSS, SSS_lag1_new = dplyr::lag(SSS, n = 1), SSS_lag2_new = dplyr::lag(SSS, n = 2), SSS_lag3_new = dplyr::lag(SSS, n = 3),
+    Pmean_lag0_new = Pmean_raw, Pmean_lag1_new = dplyr::lag(Pmean_raw, n = 1), Pmean_lag2_new = dplyr::lag(Pmean_raw, n = 2), Pmean_lag3_new = dplyr::lag(Pmean_raw, n = 3)
+  ) %>%
+  ungroup() %>%
+  select(-SST, -SSS, -Pmean_raw)
+
+# Map lags to cases
+cc_clean_triple <- cc_data %>%
+  select(id, area, isb, date) %>%
+  left_join(weather_triple, by = c("area", "date"))
+
+target_lags         <- c("lag0", "lag1", "lag2", "lag3")
+unique_areas        <- c("cadiz", "charente-maritime", "stockholm")
+triple_model_output <- data.frame()
+
+format_p <- function(p) {
+  if (is.na(p)) return("-")
+  if (p < 0.001) return("< 0.001")
+  return(sprintf("%.3f", round(p, 3)))
+}
+
+# 2. Iterate loops for all regions and lags
+for (current_area in unique_areas) {
+  for (lag_name in target_lags) {
+
+    v_sst   <- paste0("SST_", lag_name, "_new")
+    v_sss   <- paste0("SSS_", lag_name, "_new")
+    v_pmean <- paste0("Pmean_", lag_name, "_new")
+
+    # include only paired rows containing all 3 environmental variables
+    triple_subset <- cc_clean_triple %>%
+      filter(area == current_area & !is.na(.data[[v_sst]]) & !is.na(.data[[v_sss]]) & !is.na(.data[[v_pmean]]) & !is.na(id)) %>%
+      group_by(id) %>%
+      filter(any(isb == 1) & any(isb == 0)) %>%
+      ungroup()
+
+    if (nrow(triple_subset) < 10) next
+
+    actual_case_count <- sum(triple_subset$isb == 1, na.rm = TRUE)
+
+
+    triple_subset$SST_threshold_var <- pmax(triple_subset[[v_sst]] - 18, 0)
+    triple_subset$sss_absolute_psu  <- as.numeric(triple_subset[[v_sss]])
+    triple_subset$pmean_scaled_1sd  <- as.numeric(scale(triple_subset[[v_pmean]]))
+
+    # Fit the comprehensive model combining all three exposures concurrently
+    mod_triple <- clogit(isb ~ SST_threshold_var + sss_absolute_psu + pmean_scaled_1sd + strata(id), data = triple_subset)
+    sum_triple <- summary(mod_triple)$coefficients
+
+    # Extract metrics for all three exposures from the exact same model run
+    exposures <- c("SST_threshold_var", "sss_absolute_psu", "pmean_scaled_1sd")
+    labels    <- c("SST (>18°C Threshold)", "Salinity (Absolute 1 PSU)", "Precipitation (Continuous 1 SD)")
+
+    for (k in seq_along(exposures)) {
+      exp_name <- exposures[k]
+      b        <- sum_triple[exp_name, "coef"]
+      se       <- sum_triple[exp_name, "se(coef)"]
+      p_raw    <- sum_triple[exp_name, "Pr(>|z|)"]
+
+      or_txt   <- paste0(round(exp(b), 2), " (", round(exp(b - 1.96*se), 2), ", ", round(exp(b + 1.96*se), 2), ")")
+
+      triple_model_output <- rbind(triple_model_output, data.frame(
+        Region = toupper(current_area), Lag = toupper(lag_name), Cases = actual_case_count,
+        Variable = labels[k], OR = or_txt, P = format_p(p_raw), sig = p_raw < 0.05
+      ))
+    }
+  }
+}
+
+# 3. Create word doc
+ft_triple_table <- flextable(triple_model_output %>% select(-sig)) %>%
+  font(fontname = "Times New Roman", part = "all") %>% fontsize(size = 10, part = "all") %>%
+  bold(part = "header") %>% align(align = "center", j = c("Lag", "Cases", "OR", "P"), part = "all") %>%
+  merge_v(j = c("Region", "Lag", "Cases")) %>% border_remove() %>%
+  hline_top(border = fp_border(color = "black", width = 1.5)) %>%
+  hline_bottom(border = fp_border(color = "black", width = 1.5)) %>%
+  hline(i = seq(3, nrow(triple_model_output), by = 3), border = fp_border(color = "black", width = 1.0)) %>%
+  set_header_labels(Region = "Study Region", Lag = "Lag Window", Cases = "Cases (N)", Variable = "Exposure Parameter", OR = "Fully Adjusted Odds Ratio (95% CI)", P = "p-value") %>%
+  bold(i = Urban <- which(triple_model_output$sig), j = c("OR", "P")) %>% autofit()
+
+doc_output <- read_docx() %>%
+  body_add_par("Table Z.Z: Fully Adjusted Multi-Exposure Case-Crossover Sensitivity Matrix", style = "heading 1") %>%
+  body_add_flextable(ft_triple_table) %>%
+  body_add_par("\nNote:.", style = "Normal")
+
+print(doc_output, target = "MSc_Thesis_Table_Fully_Adjusted_Triple_Exposure_Sensitivity.docx")
+cat("\nSaved secondary triple-exposure sensitivity table!\n")
+
+#@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@
+# 14. Timeline of cases and environmental variable changes - temporal for all four areas
+#@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@
+
+library(dplyr)
+library(tidyr)
+library(ggplot2)
+library(scales)
+
+# A. seasonal shading of blocks
+quarterly_dates <- seq(as.Date("2010-01-01"), as.Date("2026-04-01"), by = "3 months")
+
+shading_strips <- data.frame(
+  xmin = quarterly_dates[-length(quarterly_dates)],
+  xmax = quarterly_dates[-1],
+  ymin = -Inf,
+  ymax = Inf
+)
+
+shading_strips$Start_Month <- format(shading_strips$xmin, "%m")
+shading_strips$Season <- case_when(
+  shading_strips$Start_Month == "01" ~ "Winter",
+  shading_strips$Start_Month == "04" ~ "Spring",
+  shading_strips$Start_Month == "07" ~ "Summer",
+  shading_strips$Start_Month == "10" ~ "Autumn"
+)
+
+shading_strips$Season <- factor(shading_strips$Season, levels = c("Winter", "Spring", "Summer", "Autumn"))
+
+#high-contrast gaps
+season_grays_palette <- c(
+  "Winter" = "gray96",  #
+  "Spring" = "gray88",  #
+  "Summer" = "gray65",  #
+  "Autumn" = "gray78"   #
+)
+
+# B. process environmental variables
+continuous_weather_long <- exposure %>%
+  select(area, date, SSTmean, Pmean, SSSmean) %>%
+  arrange(area, date) %>%
+  rename(`Sea Surface Temperature (°C)` = SSTmean,
+         `Daily P Mean Precipitation (mm)` = Pmean,
+         `Sea Surface Salinity (psu)` = SSSmean) %>%
+  pivot_longer(
+    cols = c(`Sea Surface Temperature (°C)`, `Daily P Mean Precipitation (mm)`, `Sea Surface Salinity (psu)`),
+    names_to = "Variable",
+    values_to = "Value"
+  )
+
+# C. Process case counts from cc_data
+case_timeline_long <- cc_data %>%
+  group_by(area, date) %>%
+  summarise(Value = sum(isb, na.rm = TRUE), .groups = "drop") %>%
+  mutate(Variable = "Vibrio Cases Count")
+
+panel_levels <- c("Sea Surface Temperature (°C)", "Daily P Mean Precipitation (mm)",
+                  "Sea Surface Salinity (psu)", "Vibrio Cases Count")
+
+continuous_weather_long$Variable <- factor(continuous_weather_long$Variable, levels = panel_levels)
+case_timeline_long$Variable      <- factor(case_timeline_long$Variable, levels = panel_levels)
+
+variable_colors <- c(
+  "Sea Surface Temperature (°C)"   = "#ef7f1a",
+  "Daily P Mean Precipitation (mm)" = "#8c4f2b",
+  "Sea Surface Salinity (psu)"     = "#1f4e79",
+  "Vibrio Cases Count"             = "#d92323"
+)
+
+
+unique_areas <- c("arcachon", "cadiz", "charente-maritime", "stockholm")
+
+# D. Run the plotting loop over each area
+for (current_area in unique_areas) {
+
+  area_weather <- continuous_weather_long %>% filter(area == current_area)
+  area_cases   <- case_timeline_long %>% filter(area == current_area)
+
+  # Set up title text
+  display_name <- switch(current_area,
+                         "arcachon"          = "Arcachon",
+                         "cadiz"             = "Cadiz",
+                         "charente-maritime" = "Charente-Maritime",
+                         "stockholm"         = "Stockholm")
+
+  p_time_series <- ggplot() +
+    # Layer 1: Plot the 4 distinct background shades for four seasons
+    geom_rect(data = shading_strips, aes(xmin = xmin, xmax = xmax, ymin = ymin, ymax = ymax, fill = Season),
+              alpha = 0.6, inherit.aes = FALSE, show.legend = TRUE) +
+
+    # Layer 2: Draw the environmental data lines
+    geom_line(data = area_weather, aes(x = date, y = Value, color = Variable),
+              linewidth = 0.4, show.legend = FALSE) +
+
+    # Layer 3:  geom_col (bars)
+    geom_col(data = area_cases, aes(x = date, y = Value, fill = "Cases"),
+             color = "#d92323", linewidth = 0.4, show.legend = FALSE) +
+
+    # Split variables into independent vertical tiers
+    facet_grid(Variable ~ ., scales = "free_y") +
+
+    # Map colors for line features and grey values for backgrounds
+    scale_color_manual(values = variable_colors) +
+    scale_fill_manual(values = season_grays_palette) +
+
+    scale_x_date(date_breaks = "2 years", date_labels = "%Y", expand = c(0, 0),
+                 limits = c(as.Date("2010-01-01"), as.Date("2026-01-01"))) +
+
+    guides(color = "none") +
+
+    labs(
+      title = paste0(display_name, " Daily Regional Oceanographic & Atmospheric Averages (2010-2025)"),
+      x = "Date",
+      y = "Value",
+      fill = "Season Key"
+    ) +
+
+    # theme background
+    theme_bw(base_family = "Times New Roman", base_size = 11) +
+    theme(
+      panel.grid.major = element_blank(),
+      panel.grid.minor = element_blank(),
+      strip.background = element_blank(),
+
+      # alignment of plots
+      strip.text.y = element_text(angle = 0, hjust = 0, vjust = 1, face = "bold", size = 10),
+      panel.spacing.y = unit(0.5, "lines"),
+      plot.title = element_text(face = "bold", size = 12, margin = margin(b = 10)),
+
+      # define the key for seasons
+      legend.position = "right",
+      legend.background = element_rect(fill = "white", color = "gray80", linewidth = 0.3),
+      legend.title = element_text(face = "bold", size = 9),
+      legend.text = element_text(size = 8),
+      legend.key.size = unit(0.4, "cm")
+    )
+
+  # Export
+  file_output_name <- paste0("MSc_Thesis_Figure_Shaded_Timeline_", tools::toTitleCase(current_area), ".png")
+  ggsave(file_output_name, plot = p_time_series, width = 12, height = 9, dpi = 300)
+
+  cat("Generated and saved dark summer timeline:", file_output_name, "\n")
+}
