@@ -16,7 +16,8 @@ if (!requireNamespace("remotes", quietly = TRUE)) install.packages("remotes")
 
 library(tidyverse)
 
-pacman::p_load(dplyr, lubridate, gnm, Epi, survival, dlnm, ggplot2, gtsummary, gt, flextable)
+pacman::p_load(dplyr, lubridate, gnm, Epi, survival, dlnm, ggplot2, gtsummary, gt, flextable, mgcv)
+
 
 #@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@
 #2 Prepare and clean the case data
@@ -128,59 +129,7 @@ str(exposure)                           # check
 exposure <- exposure %>% arrange(date)
 
 #@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@
-# 5. Exposure Data analysis
-#@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@
-
-#Distribution of exposure data for case days
-#help define any needed thresholds
-
-#A. SST
-
-# 1. Ensure your categories are created
-cc_data <- cc_data %>%
-  mutate(SST_cat = case_when(
-    SSTmean < 15  ~ "<15°C",
-    SSTmean >= 15 & SSTmean <= 18 ~ "15-18°C",
-    SSTmean > 18  ~ ">18°C"
-  ))
-
-# 2. Get counts and percentages of cases split by Area and Temperature Category
-cc_data %>%
-  filter(isb == 1) %>% 
-  group_by(area, SST_cat) %>%
-  summarise(Cases = n(), .groups = 'drop_last') %>%
-  mutate(Percentage = (Cases / sum(Cases)) * 100)
-
-#majority of cases occur over 18°C in all areas. 
-
-#B. SSS and Pmean
-
-cc_data <- cc_data %>%
-  mutate(
-    # 1. Salinity broken into your three specific groups
-    SSS_cat = case_when(
-      SSSmean < 15 ~ "<15 psu",
-      SSSmean >= 15 & SSSmean <= 30 ~ "15-30 psu",
-      SSSmean > 30 ~ ">30 psu"
-    ),
-  )
-
-print("SSSmean")
-cc_data %>%
-  filter(isb == 1) %>% 
-  group_by(area, SSS_cat) %>%
-  summarise(Cases = n(), .groups = 'drop_last') %>%
-  mutate(Percentage = (Cases / sum(Cases)) * 100)
-
-print("Pmean")
-cc_data %>%
-  filter(isb == 1) %>% 
-  group_by(area, P_cat) %>%
-  summarise(Cases = n(), .groups = 'drop_last') %>%
-  mutate(Percentage = (Cases / sum(Cases)) * 100)
-
-#@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@
-# 6. Time stratified logistic regression. Case crossover. Preparation of data
+# 5. Time stratified logistic regression. Case crossover. Preparation of data
 #@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@
 
 # 1. Load libraries
@@ -233,6 +182,60 @@ cc_data <- cc_data %>% distinct(id, date, .keep_all = TRUE)
 # Join exposure data by date and area
 cc_data <- cc_data %>%
   left_join(exposure, by = c("date" = "date", "area" = "area"))
+
+
+#@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@
+# 7. Exposure Data analysis
+#@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@
+
+#Distribution of exposure data for case days
+#help define any needed thresholds
+
+#A. SST
+
+# 1. Ensure your categories are created
+cc_data <- cc_data %>%
+  mutate(SST_cat = case_when(
+    SSTmean < 15  ~ "<15°C",
+    SSTmean >= 15 & SSTmean <= 18 ~ "15-18°C",
+    SSTmean > 18  ~ ">18°C"
+  ))
+
+# 2. Get counts and percentages of cases split by Area and Temperature Category
+cc_data %>%
+  filter(isb == 1) %>% 
+  group_by(area, SST_cat) %>%
+  summarise(Cases = n(), .groups = 'drop_last') %>%
+  mutate(Percentage = (Cases / sum(Cases)) * 100)
+
+#majority of cases occur over 18°C in all areas. 
+
+#B. SSS and Pmean
+
+cc_data <- cc_data %>%
+  mutate(
+    # 1. Salinity broken into your three specific groups
+    SSS_cat = case_when(
+      SSSmean < 15 ~ "<15 psu",
+      SSSmean >= 15 & SSSmean <= 30 ~ "15-30 psu",
+      SSSmean > 30 ~ ">30 psu"
+    ),
+  )
+
+print("SSSmean")
+cc_data %>%
+  filter(isb == 1) %>% 
+  group_by(area, SSS_cat) %>%
+  summarise(Cases = n(), .groups = 'drop_last') %>%
+  mutate(Percentage = (Cases / sum(Cases)) * 100)
+
+print("Pmean")
+cc_data %>%
+  filter(isb == 1) %>% 
+  group_by(area, Pmean) %>%
+  summarise(Cases = n(), .groups = 'drop_last') %>%
+  mutate(Percentage = (Cases / sum(Cases)) * 100)
+
 
 #@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@
 # 7 calculate SST lags 0-3 days prior to admission
@@ -409,9 +412,7 @@ library(dplyr)
 library(officer)
 library(flextable)
 
-# ===================================================================
-# STEP 1: ISOLATE DISTINCT DAILY WEATHER 
-# ===================================================================
+#1
 daily_sst_clean <- cc_master_sst %>%
   distinct(area, date, SST = SST_lag0, Tmean, Pmean, Rmean)
 
@@ -423,18 +424,14 @@ weather_correlation_matrix <- daily_sst_clean %>%
   select(SST, SSS, Tmean, Pmean, Rmean) %>%
   na.omit()
 
-# ===================================================================
-# STEP 2: RUN THE SPEARMAN RANK CORRELATION MATRIX
-# ===================================================================
+#2. Spearman Rank
 cor_matrix_output <- cor(weather_correlation_matrix, method = "spearman")
 
 # Format into a full, unmasked data frame grid
 cor_df <- as.data.frame(round(cor_matrix_output, 3))
 cor_df <- cbind(Variable = rownames(cor_df), cor_df)
 
-# ===================================================================
-# STEP 3: GENERATE THE FULL WORD DOCUMENT TABLE (TABLE A.1)
-# ===================================================================
+#3. word doc
 ft_cor_table <- flextable(cor_df) %>%
   font(fontname = "Times New Roman", part = "all") %>% 
   fontsize(size = 11, part = "all") %>% 
@@ -456,7 +453,7 @@ ft_cor_table <- flextable(cor_df) %>%
   bold(i = 3, j = "Rmean") %>% # Tmean vs Rmean
   autofit()
 
-# Build the final full-grid Word file asset
+# word file
 doc_output <- read_docx() %>%
   body_add_par("Table A.1: Full Spearman Rank Correlation Matrix of Secondary Atmospheric and Proximal Marine Exposure Covariates", style = "heading 1") %>%
   body_add_flextable(ft_cor_table) %>%
@@ -554,7 +551,7 @@ for (current_area in unique_areas) {
     sss_final$sst_scaled_vector <- as.numeric(scale(sst_final[[v_sst]]))
     sss_final$sss_scaled_vector <- as.numeric(scale(sss_final[[v_sss]]))
     
-    # 1. SST Threshold model adjusting for scaled continuous salinity
+    # Run Track 1: SST Threshold model adjusting for scaled continuous salinity
     mod_sst   <- clogit(isb ~ SST_threshold_var + sss_scaled_vector + strata(id), data = sss_final)
     sum_sst   <- summary(mod_sst)$coefficients
     b_sst     <- sum_sst[1, "coef"]
@@ -570,7 +567,7 @@ for (current_area in unique_areas) {
       OR = exp(b_sst), lower = exp(b_sst - 1.96*se_sst), upper = exp(b_sst + 1.96*se_sst)
     ))
     
-    # 2. Standardised Continuous Salinity model adjusted for scaled continuous temperature
+    # Run Track 2: Standardised Continuous Salinity model adjusted for scaled continuous temperature
     mod_sss   <- clogit(isb ~ sss_scaled_vector + sst_scaled_vector + strata(id), data = sss_final)
     sum_sss   <- summary(mod_sss)$coefficients
     b_sss     <- sum_sss[1, "coef"]
@@ -666,6 +663,7 @@ cat("\nSuccess! Saved your main threshold regression table and forest plot to yo
 # 11. GAM plots to show interaction between SST and SSS
 #@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@
 
+library(mgcv)
 #using most significant lag day for each area 
 
 # CADIZ (LAG 1) 
