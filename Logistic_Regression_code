@@ -114,7 +114,7 @@ area_stratified_table
 area_stratified_table %>% as_flex_table() %>% save_as_docx(path = "Epi_Table_by_Area.docx")
 
 #@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@
-# 5. Exposure Data import and cleaning
+# 5. Exposure Data (SST, SSS, Tmean, Pmean, Rmean) import and cleaning
 #@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@
 
 #Open and read exposure data
@@ -128,7 +128,59 @@ str(exposure)                           # check
 exposure <- exposure %>% arrange(date)
 
 #@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@
-# 6. Time stratfied logistic regression. #Pooled. Case crossover design
+# 5. Exposure Data analysis
+#@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@
+
+#Distribution of exposure data for case days
+#help define any needed thresholds
+
+#A. SST
+
+# 1. Ensure your categories are created
+cc_data <- cc_data %>%
+  mutate(SST_cat = case_when(
+    SSTmean < 15  ~ "<15°C",
+    SSTmean >= 15 & SSTmean <= 18 ~ "15-18°C",
+    SSTmean > 18  ~ ">18°C"
+  ))
+
+# 2. Get counts and percentages of cases split by Area and Temperature Category
+cc_data %>%
+  filter(isb == 1) %>% 
+  group_by(area, SST_cat) %>%
+  summarise(Cases = n(), .groups = 'drop_last') %>%
+  mutate(Percentage = (Cases / sum(Cases)) * 100)
+
+#majority of cases occur over 18°C in all areas. 
+
+#B. SSS and Pmean
+
+cc_data <- cc_data %>%
+  mutate(
+    # 1. Salinity broken into your three specific groups
+    SSS_cat = case_when(
+      SSSmean < 15 ~ "<15 psu",
+      SSSmean >= 15 & SSSmean <= 30 ~ "15-30 psu",
+      SSSmean > 30 ~ ">30 psu"
+    ),
+  )
+
+print("SSSmean")
+cc_data %>%
+  filter(isb == 1) %>% 
+  group_by(area, SSS_cat) %>%
+  summarise(Cases = n(), .groups = 'drop_last') %>%
+  mutate(Percentage = (Cases / sum(Cases)) * 100)
+
+print("Pmean")
+cc_data %>%
+  filter(isb == 1) %>% 
+  group_by(area, P_cat) %>%
+  summarise(Cases = n(), .groups = 'drop_last') %>%
+  mutate(Percentage = (Cases / sum(Cases)) * 100)
+
+#@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@
+# 6. Time stratified logistic regression. Case crossover. Preparation of data
 #@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@
 
 # 1. Load libraries
@@ -141,17 +193,17 @@ n_distinct(cases$id) == nrow(cases) # check all case ids are unique
 
 # 1. Standardise date formats in both exposure and cases data for case crossover
 cases$date            <- as.Date(parse_date_time(cases$date, orders = c("ymd", "dmy", "mdy")))
-exposure_cleaned$date <- as.Date(parse_date_time(exposure_cleaned$date, orders = c("ymd", "dmy", "mdy")))
+exposure$date <- as.Date(parse_date_time(exposure$date, orders = c("ymd", "dmy", "mdy")))
 
 # 2. Ignore spacing in cells, and join text characters for 'area'
 cases$area            <- trimws(tolower(as.character(cases$area)))
-exposure_cleaned$area <- trimws(tolower(as.character(exposure_cleaned$area)))
+exposure$area <- trimws(tolower(as.character(exposure$area)))
 
-# Sort files chronologically to maintain consistency
+# Sort chronologically
 cases            <- cases %>% arrange(date)
-exposure_cleaned <- exposure_cleaned %>% arrange(date)
+exposure <- exposure %>% arrange(date)
 
-# include 249 cases, add dow, month, and year for matching
+# for 249 cases, add dow, month, and year for matching
 cases_cleaned <- cases %>%
   filter(id <= 249) %>%
   mutate(case_date = date,
@@ -180,11 +232,10 @@ cc_data <- cc_data %>% distinct(id, date, .keep_all = TRUE)
 
 # Join exposure data by date and area
 cc_data <- cc_data %>%
-  left_join(exposure_cleaned, by = c("date" = "date", "area" = "area"))
-
+  left_join(exposure, by = c("date" = "date", "area" = "area"))
 
 #@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@
-# 7 calculate SST specific lags
+# 7 calculate SST lags 0-3 days prior to admission
 #@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@
 
 cc_data <- cc_data %>%
@@ -202,172 +253,664 @@ cc_data <- cc_data %>%
 print(paste("Total Observations Matched:", nrow(cc_data)))
 print(paste("Remaining SSTmean missing items:", sum(is.na(cc_data$SSTmean))))
 
-#@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@
-# 9. PART A: Pooled analysis. Conditional logistic regression. Case crossover design
-#@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@
-
-# Create a natural cubic spline basis for sea surface temperature (lag 0)
-ncstemp <- onebasis(cc_data$SSTmean, "ns", df = 3)
-
-# Fit the conditional logistic regression model
-modclog <- clogit(isb ~ ncstemp + strata(interaction(id, area)), data = cc_data)
-summary(modclog) # The non-linear conditional logistic regression model confirms a significant overall association
-
-# Predict the exposure-response curve and plot the spline
-predclog <- crosspred(ncstemp, modclog, by = 1)
-plot(predclog, "overall", xlab = "Daily mean temperature (°C), lag 0", ylab = "Odds Ratio", lwd = 2, ci.arg = list(density = 100, col = grey(0.5)))
-
-# set 18°C threshold baseline for SST, quantify the heat effect and stat significance
-modlthres <- clogit(isb ~ hi18_lag0 + strata(interaction(id, area)), data = cc_data)
-summary(modlthres)
-# for every 1°C increase in daily mean sea surface temperature above the 18°C threshold, the odds of a diagnosed Vibrio infection increase significantly by 39.9%
-#(OR = 1.399; 95% CI: [1.195, 1.636]; (p < 0.001)).
-
-#run logistic regression for SSTmean Pmean, SSSmean and Rmean to see if the lagged exposure variables
-#are associated with outcome.
-
-# 1. Run all the separate models
-mod_SST   <- clogit(isb ~ hi18_lag0 + strata(interaction(id, area)), data = cc_data)
-mod_P     <- clogit(isb ~ Pmean     + strata(interaction(id, area)), data = cc_data)
-mod_SSS   <- clogit(isb ~ SSSmean   + strata(interaction(id, area)), data = cc_data)
-mod_Rmean <- clogit(isb ~ Rmean     + strata(interaction(id, area)), data = cc_data)
-
-# 2. Show standard row coefficients from each model
-row_SST   <- summary(mod_SST)$coefficients["hi18_lag0", ]
-row_P     <- summary(mod_P)$coefficients["Pmean", ]
-row_SSS   <- summary(mod_SSS)$coefficients["SSSmean", ]
-row_Rmean <- summary(mod_Rmean)$coefficients["Rmean", ]
-
-# 3. Combine exposure variables and associations into one table
-results_table <- rbind(
-  SSTmean_Above18 = row_SST,
-  Pmean           = row_P,
-  SSSmean         = row_SSS,
-  Rmean           = row_Rmean
-)
-
-# 4. Clean the columns and show table
-results_table <- results_table[, c("coef", "exp(coef)", "se(coef)", "z", "Pr(>|z|)")]
-round(results_table, 4)
 
 #@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@
-# 10. #Unadjusted distributed lag sea surface temperature model
+# 8 calculate SSS specific lags for 0-3 days prior to admission
 #@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@
 
-exposure_cleaned <- exposure_cleaned %>%
-  arrange(area, date) %>%
-  group_by(area) %>%
+cc_data <- cc_data %>%
+  arrange(id, date) %>%
+  group_by(id) %>%
   mutate(
-    hi18_lag0 = pmax(SSTmean - 18, 0),
-    hi18_lag1 = pmax(dplyr::lag(SSTmean, 1) - 18, 0),
-    hi18_lag2 = pmax(dplyr::lag(SSTmean, 2) - 18, 0),
-    hi18_lag3 = pmax(dplyr::lag(SSTmean, 3) - 18, 0)
+    sal_lag0 = pmax(SSSmean - 0),
+    sal_lag1 = pmax(dplyr::lag(SSSmean, 1)),
+    sal_lag2 = pmax(dplyr::lag(SSSmean, 2)),
+    sal_lag3 = pmax(dplyr::lag(SSSmean, 3))
   ) %>%
   ungroup()
 
-exposure_cleaned <- exposure_cleaned %>%
-  mutate(across(c(hi18_lag0, hi18_lag1, hi18_lag2, hi18_lag3), ~replace_na(.x, 0)))
-
-cc_data <- cases_cleaned %>%
-  select(id, case_date, dow, month, year, mage, area, sex) %>%
-  inner_join(alldays, by = c("dow","month","year"), relationship = "many-to-many") %>%
-  mutate(isb = as.integer(date == case_date)) %>%
-  distinct(id, date, .keep_all = TRUE) %>%
-  left_join(exposure_cleaned, by = c("date" = "date", "area" = "area"))
-
-modlt03_raw <- clogit(isb ~ hi18_lag0 + hi18_lag1 + hi18_lag2 + hi18_lag3 +
-                        strata(interaction(id, area)), data = cc_data)
-summary(modlt03_raw)
-
-# 3. Extract and pool the raw coefficients
-lags    <- c("hi18_lag0","hi18_lag1","hi18_lag2","hi18_lag3")
-b_raw   <- coef(modlt03_raw)[lags]
-V_raw   <- vcov(modlt03_raw)[lags, lags]
-L       <- rep(1, length(lags))
-est_raw <- sum(L * b_raw)
-se_raw  <- sqrt(as.numeric(t(L) %*% V_raw %*% L))
-OR_raw  <- exp(est_raw)
-LCL_raw <- exp(est_raw - 1.96 * se_raw)
-UCL_raw <- exp(est_raw + 1.96 * se_raw)
-
-# show cumulative unadjusted OR
-cat("\n--- POOLED CUMULATIVE UNADJUSTED OVERALL RE-CALCULATED EFFECT ---\n")
-print(c(Unadjusted_OR = OR_raw, Lower_CI = LCL_raw, Upper_CI = UCL_raw))
-
+# show no missing rows in the data to confirm matching
+print(paste("Total Observations Matched:", nrow(cc_data)))
+print(paste("Remaining SSSmean missing items:", sum(is.na(cc_data$SSSmean))))
 
 #@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@
-#11. Intermediate single variable (rainfall) adjusted model
-#@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@
-modlt03_Pmean <- clogit(isb ~ hi18_lag0 + hi18_lag1 + hi18_lag2 + hi18_lag3 + Pmean + strata(interaction(id, area)), data = cc_data)
-summary(modlt03_Pmean)
-
-# Extract and pool the rainfall-adjusted coefficients
-b_Pmean   <- coef(modlt03_Pmean)[lags]
-V_Pmean   <- vcov(modlt03_Pmean)[lags, lags]
-est_Pmean <- sum(L * b_Pmean)
-se_Pmean  <- sqrt(as.numeric(t(L) %*% V_Pmean %*% L))
-OR_Pmean  <- exp(est_Pmean)
-LCL_Pmean <- exp(est_Pmean - 1.96 * se_Pmean)
-UCL_Pmean <- exp(est_Pmean + 1.96 * se_Pmean)
-
-
-#@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@
-# 12. Fully adjusted multivariate model
+# 9. Pooled analysis. Conditional logistic regression. Case crossover design
 #@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@
 
-modlt03 <- clogit(isb ~ hi18_lag0 + hi18_lag1 + hi18_lag2 + hi18_lag3 + Pmean + SSSmean + Rmean + strata(interaction(id, area)), data = cc_data)
-summary(modlt03)
 
-# Extract and pool fully adjusted coefficients
-b_adj   <- coef(modlt03)[lags]
-V_adj   <- vcov(modlt03)[lags, lags]
-est_adj <- sum(L * b_adj)
-se_adj  <- sqrt(as.numeric(t(L) %*% V_adj %*% L))
-OR_adj  <- exp(est_adj)
-LCL_adj <- exp(est_adj - 1.96 * se_adj)
-UCL_adj <- exp(est_adj + 1.96 * se_adj)
+# pooled model, univariate logistic regression for SSTmean Pmean, SSSmean, Tmean and Rmean. See if the lagged exposure variables
+#are associated with cases
 
+# 1. Load libraries
+library(dplyr)
+library(survival)
+library(officer)
+library(flextable)
 
-#@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@
-# 13. Model tests
-#@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@
-anova(modlt03_Pmean, modlt03, test = "Chisq")
-
-cat("\n--- CUMULATIVE ODDS RATIO COMPARISONS ---\n")
-print(c(Unadjusted_OR = OR_raw, Lower_CI = LCL_raw, Upper_CI = UCL_raw))
-print(c(Rain_Adjusted_OR = OR_Pmean, Lower_CI = LCL_Pmean, Upper_CI = UCL_Pmean))
-print(c(Fully_Adjusted_OR = OR_adj, Lower_CI = LCL_adj, Upper_CI = UCL_adj))
-
-#after adjusting for potential confounders the relationship between isb and
-#SSTmean is unaffected
-
-#@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@
-# 14. PART B: Area stratified logistic regression SST, adjusting for other variables
-#@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@
-
-regional_results_full <- cc_data %>%
-  group_by(area) %>%
-  group_modify(~{
-
-    # Clean the subset: Keep only patient IDs that have BOTH case and control days
-    clean_sub <- .x %>%
-      group_by(id) %>%
-      filter(any(isb == 1) & any(isb == 0)) %>%
-      ungroup()
-
-    tryCatch({
-      mod <- clogit(isb ~ SSTmean + Pmean + SSSmean + Rmean + strata(id), data = clean_sub)
-
-      # shows all exposure rows for this region
-      as.data.frame(summary(mod)$coefficients) %>%
-        tibble::rownames_to_column("term")
-
-    }, error = function(e) {
-      data.frame(term = "Model Convergence Failure", coef = NA, `exp(coef)` = NA, `se(coef)` = NA, z = NA, `Pr(>|z|)` = NA, check.names = FALSE)
-    })
-  }) %>%
+# 2. Define lags included in the model (Lag 0 is the base variable or date of admission)
+cc_data_lags <- cc_data %>%
+  arrange(area, id, date) %>%
+  group_by(area, id) %>%
+  mutate(
+    SSTmean_lag_1 = lag(SSTmean, 1), SSTmean_lag_2 = lag(SSTmean, 2), SSTmean_lag_3 = lag(SSTmean, 3),
+    Tmean_lag_1   = lag(Tmean, 1),   Tmean_lag_2   = lag(Tmean, 2),   Tmean_lag_3   = lag(Tmean, 3),
+    Pmean_lag_1   = lag(Pmean, 1),   Pmean_lag_2   = lag(Pmean, 2),   Pmean_lag_3   = lag(Pmean, 3),
+    SSSmean_lag_1 = lag(SSSmean, 1), SSSmean_lag_2 = lag(SSSmean, 2), SSSmean_lag_3 = lag(SSSmean, 3),
+    Rmean_lag_1   = lag(Rmean, 1),   Rmean_lag_2   = lag(Rmean, 2),   Rmean_lag_3   = lag(Rmean, 3)
+  ) %>%
   ungroup()
 
-# View
-print(regional_results_full, n = 30)
+# 3. Define configurations
+variable_configs <- list(
+  list(base_name = "SSTmean", label = "Sea Surface Temperature (SSTmean - Continuous Absolute)"),
+  list(base_name = "Tmean",   label = "Air Temperature (Tmean - Continuous Absolute)*"),
+  list(base_name = "Pmean",   label = "Precipitation (Pmean - Continuous Absolute)"),
+  list(base_name = "SSSmean", label = "Sea Surface Salinity (SSSmean - Continuous Absolute)"),
+  list(base_name = "Rmean",   label = "Relative Humidity (Rmean - Continuous Absolute)")
+)
+
+lags_to_test      <- 0:3
+screening_results <- data.frame()
+
+format_p_value <- function(p) {
+  if (is.na(p)) return("-")
+  if (p < 0.001) return("< 0.001")
+  return(sprintf("%.3f", round(p, 3)))
+}
+
+# 4. Run loop for each variable and lag combination
+for (config in variable_configs) {
+  for (current_lag in lags_to_test) {
+    
+    # Clean column matching logic for lag 0 vs historical lags
+    target_column <- if(current_lag == 0) config$base_name else paste0(config$base_name, "_lag_", current_lag)
+    
+    # Filter complete entries for this specific metric
+    sub_data <- cc_data_lags %>%
+      filter(!is.na(.data[[target_column]]))
+    
+    # Verify pairing case-control cross variance
+    valid_strata <- sub_data %>%
+      group_by(area, id) %>%
+      summarise(has_match = any(isb == 1) & any(isb == 0), .groups = "drop") %>%
+      filter(has_match)
+    
+    final_subset <- sub_data %>%
+      inner_join(valid_strata, by = c("area", "id"))
+    
+    if (nrow(final_subset) < 10) next
+    
+    # show cases used by the model
+    actual_cases <- sum(final_subset$isb == 1, na.rm = TRUE)
+
+    formula_obj <- reformulate(c(target_column, "strata(interaction(id, area))"), response = "isb")
+    
+    tryCatch({
+      mod_run <- clogit(formula_obj, data = final_subset)
+      sum_run <- summary(mod_run)$coefficients
+      
+      b     <- sum_run[target_column, "coef"]
+      se    <- sum_run[target_column, "se(coef)"]
+      p_raw <- sum_run[target_column, "Pr(>|z|)"]
+      
+      or          <- paste0(round(exp(b), 2), " (", round(exp(b - 1.96*se), 2), ", ", round(exp(b + 1.96*se), 2), ")")
+      p_formatted <- format_p_value(p_raw)
+      
+      screening_results <- rbind(screening_results, data.frame(
+        Parameter = config$label,
+        Lag       = paste0("Lag ", current_lag),
+        Cases     = actual_cases,
+        OR_CI     = or,
+        P_Value   = p_formatted,
+        sig       = p_raw < 0.05,
+        stringsAsFactors = FALSE
+      ))
+    }, error = function(e){})
+  }
+}
+
+# 5. Make word doc of outputs
+ft_screen_table <- flextable(screening_results %>% select(-sig)) %>%
+  font(fontname = "Times New Roman", part = "all") %>% 
+  fontsize(size = 11, part = "all") %>% 
+  bold(part = "header") %>%
+  align(align = "center", j = c("Lag", "Cases", "OR_CI", "P_Value"), part = "all") %>% 
+  align(align = "left", j = c("Parameter"), part = "all") %>%
+  merge_v(j = c("Parameter", "Cases")) %>% 
+  border_remove() %>%
+  hline_top(border = fp_border(color = "black", width = 1.5)) %>% 
+  hline_bottom(border = fp_border(color = "black", width = 1.5)) %>% 
+  hline(border = fp_border(color = "gray80", width = 0.5)) %>%
+  set_header_labels(Parameter = "Environmental Exposure Parameter", Lag = "Exposure Lag", 
+                    Cases = "Total Cases (N)", OR_CI = "Crude Odds Ratio (95% CI)", P_Value = "p-value") %>%
+  bold(i = which(screening_results$sig), j = c("OR_CI", "P_Value")) %>% 
+  autofit()
+
+doc_output <- read_docx() %>%
+  body_add_par("Table Z.1: Pooled Single-Variable Screening Associations Across Combined Matched Cohorts (Lags 0-3)", style = "heading 1") %>%
+  body_add_flextable(ft_screen_table) %>%
+  body_add_par("\nNote: Bold entries indicate statistical significance at the p < 0.05 level. Each parameter row represents a completely distinct, standalone conditional logistic regression framework stratified by the interaction of patient id and study region [strata(interaction(id, area))].", style = "Normal") %>%
+  body_add_par("*Warning: Air Temperature (Tmean) and Sea Surface Temperature (SSTmean) exhibit extreme physical multicollinearity (high mutual correlation). They are evaluated here in independent models for diagnostic scoping only and must not be included simultaneously in multivariate regression designs.", style = "Normal")
+
+print(doc_output, target = "MSc_Thesis_Table_Pooled_Screening_Models_Lags.docx")
+cat("\nSaved your multi-lag pooled screening table directly to your workspace folder directory!\n")
+
+#@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@
+# 10. Correlation between environmental variables
+#@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@
+
+# Interaction model to see if the effect of salinity depends on the temperature
+mod_interaction <- clogit(isb ~ SSTmean * SSSmean + strata(interaction(id, area)), data = cc_data)
+summary(mod_interaction)
+
+
+# 1. Load standard required libraries
+library(dplyr)
+library(officer)
+library(flextable)
+
+# ===================================================================
+# STEP 1: ISOLATE DISTINCT DAILY WEATHER 
+# ===================================================================
+daily_sst_clean <- cc_master_sst %>%
+  distinct(area, date, SST = SST_lag0, Tmean, Pmean, Rmean)
+
+daily_sss_clean <- cc_master_sss %>%
+  distinct(area, date, SSS = SSS_lag0)
+
+weather_correlation_matrix <- daily_sst_clean %>%
+  inner_join(daily_sss_clean, by = c("area", "date")) %>%
+  select(SST, SSS, Tmean, Pmean, Rmean) %>%
+  na.omit()
+
+# ===================================================================
+# STEP 2: RUN THE SPEARMAN RANK CORRELATION MATRIX
+# ===================================================================
+cor_matrix_output <- cor(weather_correlation_matrix, method = "spearman")
+
+# Format into a full, unmasked data frame grid
+cor_df <- as.data.frame(round(cor_matrix_output, 3))
+cor_df <- cbind(Variable = rownames(cor_df), cor_df)
+
+# ===================================================================
+# STEP 3: GENERATE THE FULL WORD DOCUMENT TABLE (TABLE A.1)
+# ===================================================================
+ft_cor_table <- flextable(cor_df) %>%
+  font(fontname = "Times New Roman", part = "all") %>% 
+  fontsize(size = 11, part = "all") %>% 
+  bold(part = "header") %>%
+  align(align = "center", j = c("SST", "SSS", "Tmean", "Pmean", "Rmean"), part = "all") %>% 
+  align(align = "left", j = "Variable", part = "all") %>%
+  border_remove() %>%
+  hline_top(border = fp_border(color = "black", width = 1.5)) %>% 
+  hline_bottom(border = fp_border(color = "black", width = 1.5)) %>% 
+  hline(border = fp_border(color = "gray80", width = 0.5)) %>%
+  set_header_labels(
+    Variable = "Environmental Metric",
+    SST = "SST", SSS = "SSS", Tmean = "Tmean", Pmean = "Pmean", Rmean = "Rmean"
+  ) %>%
+  # Apply bold style to all instances of severe collinearity (>0.70)
+  bold(i = 3, j = "SST") %>%   # Tmean vs SST
+  bold(i = 1, j = "Tmean") %>% # SST vs Tmean
+  bold(i = 5, j = "Tmean") %>% # Rmean vs Tmean
+  bold(i = 3, j = "Rmean") %>% # Tmean vs Rmean
+  autofit()
+
+# Build the final full-grid Word file asset
+doc_output <- read_docx() %>%
+  body_add_par("Table A.1: Full Spearman Rank Correlation Matrix of Secondary Atmospheric and Proximal Marine Exposure Covariates", style = "heading 1") %>%
+  body_add_flextable(ft_cor_table) %>%
+  body_add_par("\nNote: Matrix values represent Spearman rank correlation coefficients (p) derived across unified daily chronological timelines. Bold entries explicitly highlight severe multicollinearity thresholds exceeding the standard p = 0.70 boundary rule.", style = "Normal")
+
+print(doc_output, target = "MSc_Thesis_Table_A1_Correlation_Matrix.docx")
+cat("\nSaved your full correlation matrix table document to your folder directory!\n")
+
+
+#@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@
+# 11. Area stratified, SST and SSS hybrid logistic model, case crossover.
+#@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@
+
+# 1. Load libraries
+library(dplyr)
+library(survival)
+library(ggplot2)
+library(officer)
+library(flextable)
+
+# A. Use SST and SSS from CC paired data
+daily_weather_sst <- cc_master_sst %>% distinct(area, date, SST_raw = SST_lag0)
+daily_weather_sss <- cc_master_sss %>% distinct(area, date, SSS_raw = SSS_lag0)
+
+# B. Combine datasets and arrange strictly by calendar date to calculate lags
+continuous_weather <- daily_weather_sst %>%
+  inner_join(daily_weather_sss, by = c("area", "date")) %>%
+  arrange(area, date) %>%
+  group_by(area) %>%
+  mutate(
+    SST_lag0_new = SST_raw,
+    SST_lag1_new = dplyr::lag(SST_raw, n = 1),
+    SST_lag2_new = dplyr::lag(SST_raw, n = 2),
+    SST_lag3_new = dplyr::lag(SST_raw, n = 3),
+    
+    SSS_lag0_new = SSS_raw,
+    SSS_lag1_new = dplyr::lag(SSS_raw, n = 1),
+    SSS_lag2_new = dplyr::lag(SSS_raw, n = 2),
+    SSS_lag3_new = dplyr::lag(SSS_raw, n = 3)
+  ) %>%
+  ungroup() %>%
+  select(-SST_raw, -SSS_raw)
+
+# C. Map environmental lags directly to cases
+cc_clean_sst <- cc_master_sst %>% select(id, area, isb, date) %>% left_join(continuous_weather, by = c("area", "date"))
+cc_clean_sss <- cc_master_sss %>% select(id, area, isb, date) %>% left_join(continuous_weather, by = c("area", "date"))
+
+#2. LOOP, RUN REGRESSIONS, AND EXTRACT CALCULATION MATRIX
+
+target_lags       <- c("lag0", "lag1", "lag2", "lag3")
+unique_areas      <- c("cadiz", "charente-maritime", "stockholm")
+two_model_results <- data.frame()
+forest_results    <- data.frame() 
+
+format_p <- function(p) {
+  if (is.na(p)) return("-")
+  if (p < 0.001) return("< 0.001")
+  return(sprintf("%.3f", round(p, 3)))
+}
+
+for (current_area in unique_areas) {
+  for (lag_name in target_lags) {
+    
+    # Identify variables for this loop 
+    v_sst <- paste0("SST_", lag_name, "_new")
+    v_sss <- paste0("SSS_", lag_name, "_new")
+    
+    # Filter out missing data
+    sst_subset <- cc_clean_sst %>% filter(area == current_area & !is.na(.data[[v_sst]]) & !is.na(id))
+    sss_subset <- cc_clean_sss %>% filter(area == current_area & !is.na(.data[[v_sss]]) & !is.na(id))
+    
+    # Match Cases and controls 
+    common_ids <- intersect(sst_subset$id, sss_subset$id)
+    sst_final  <- sst_subset %>% filter(id %in% common_ids) %>% arrange(id, isb)
+    sss_final  <- sss_subset %>% filter(id %in% common_ids) %>% arrange(id, isb)
+    
+    # Delete unpaired data
+    valid_ids <- sss_final %>%
+      group_by(id) %>% summarise(has_match = any(isb == 1) & any(isb == 0), .groups = "drop") %>%
+      filter(has_match) %>% pull(id)
+    
+    sst_final <- sst_final %>% filter(id %in% valid_ids)
+    sss_final <- sss_final %>% filter(id %in% valid_ids)
+    if (nrow(sss_final) < 10) next
+    
+    # Define populations
+    if (current_area == "cadiz") current_case_count <- 166
+    if (current_area == "charente-maritime") current_case_count <- 39
+    if (current_area == "stockholm") current_case_count <- 36
+    
+    # LAYOUT:
+    # 1. SST threshold vector tracking continuous values above 18°C
+    sss_final$SST_threshold_var <- pmax(sst_final[[v_sst]] - 18, 0)
+    # 2. Localized continuous standardized variables (Z-Scores)
+    sss_final$sst_scaled_vector <- as.numeric(scale(sst_final[[v_sst]]))
+    sss_final$sss_scaled_vector <- as.numeric(scale(sss_final[[v_sss]]))
+    
+    # Run Track 1: SST Threshold model adjusting for scaled continuous salinity
+    mod_sst   <- clogit(isb ~ SST_threshold_var + sss_scaled_vector + strata(id), data = sss_final)
+    sum_sst   <- summary(mod_sst)$coefficients
+    b_sst     <- sum_sst[1, "coef"]
+    se_sst    <- sum_sst[1, "se(coef)"]
+    p_sst_val <- sum_sst[1, "Pr(>|z|)"]
+    
+    or_sst_txt <- paste0(round(exp(b_sst), 2), " (", round(exp(b_sst - 1.96*se_sst), 2), ", ", round(exp(b_sst + 1.96*se_sst), 2), ")")
+    p_sst_txt  <- format_p(p_sst_val)
+    
+    #  parameters for the continuous forest figure 
+    forest_results <- rbind(forest_results, data.frame(
+      Region = toupper(current_area), Lag = toupper(lag_name), Variable = "SST (>18°C Threshold per 1°C increase)",
+      OR = exp(b_sst), lower = exp(b_sst - 1.96*se_sst), upper = exp(b_sst + 1.96*se_sst)
+    ))
+    
+    # Run Track 2: Standardised Continuous Salinity model adjusted for scaled continuous temperature
+    mod_sss   <- clogit(isb ~ sss_scaled_vector + sst_scaled_vector + strata(id), data = sss_final)
+    sum_sss   <- summary(mod_sss)$coefficients
+    b_sss     <- sum_sss[1, "coef"]
+    se_sss    <- sum_sss[1, "se(coef)"]
+    p_sss_val <- sum_sss[1, "Pr(>|z|)"]
+    
+    or_sss_txt <- paste0(round(exp(b_sss), 2), " (", round(exp(b_sss - 1.96*se_sss), 2), ", ", round(exp(b_sss + 1.96*se_sss), 2), ")")
+    p_sss_txt  <- format_p(p_sss_val)
+    
+    #  parameters for the continuous forest figure mapping
+    forest_results <- rbind(forest_results, data.frame(
+      Region = toupper(current_area), Lag = toupper(lag_name), Variable = "Salinity (Continuous per 1 SD change)",
+      OR = exp(b_sss), lower = exp(b_sss - 1.96*se_sss), upper = exp(b_sss + 1.96*se_sss)
+    ))
+    
+    # Compile data frame rows cleanly 
+    sst_row <- data.frame(Region = toupper(current_area), Lag = toupper(lag_name), Cases = current_case_count, Variable = "SST (>18°C)", OR = or_sst_txt, P = p_sst_txt, sig = p_sst_val < 0.05)
+    sss_row <- data.frame(Region = toupper(current_area), Lag = toupper(lag_name), Cases = current_case_count, Variable = "Salinity (Continuous 1 SD)", OR = or_sss_txt, P = p_sss_txt, sig = p_sss_val < 0.05)
+    two_model_results <- rbind(two_model_results, sst_row, sss_row)
+  }
+}
+
+#define a 1 unit SD change for SSS for each area
+
+library(dplyr)
+
+# Calculate the exact average and 1 SD spread for Sea Surface Salinity
+regional_salinity_metrics <- cc_master_pmean %>% # or your master data file
+  group_by(area) %>%
+  summarise(
+    Average_Salinity_PSU = round(mean(SSSmean, na.rm = TRUE), 2),
+    One_SD_Value_PSU     = round(sd(SSSmean, na.rm = TRUE), 2)
+  ) %>%
+  ungroup()
+
+print(regional_salinity_metrics)
+
+#3 make forest plot 
+
+cat("\nGenerating and saving continuous forest plot...\n")
+
+forest_results$Lag <- factor(forest_results$Lag, levels = rev(c("LAG0", "LAG1", "LAG2", "LAG3")))
+
+p_master_forest <- ggplot(forest_results, aes(x = OR, y = Lag, xmin = lower, xmax = upper)) +
+  geom_vline(xintercept = 1, linetype = "dashed", color = "gray50", linewidth = 0.8) +
+  geom_errorbarh(aes(color = Variable), height = 0.2, linewidth = 1) +
+  geom_point(aes(color = Variable), size = 3) +
+  facet_grid(Region ~ Variable, scales = "free_x") +
+  scale_color_manual(values = c("#1f4e79", "#b22222")) +
+  coord_cartesian(xlim = c(0, 10)) +
+  labs(
+    title = "Multivariate Case-Crossover Continuous Odds Ratios",
+    subtitle = "Unified summary of localized environmental effect parameters spanning all lag timelines",
+    x = "Odds Ratio (95% Confidence Interval)", y = "Lag Window Timeline"
+  ) +
+  theme_minimal() +
+  theme(
+    legend.position = "none",
+    text = element_text(family = "Times New Roman", size = 12)
+  )
+
+ggsave("MSc_Thesis_Figure_Continuous_Standardized_ForestPlot.png", plot = p_master_forest, width = 10, height = 7, dpi = 300)
+
+#4. Word output table of lags and odds.
+
+ft_table <- flextable(two_model_results %>% select(-sig)) %>%
+  font(fontname = "Times New Roman", part = "all") %>%
+  fontsize(size = 11, part = "all") %>%
+  bold(part = "header") %>%
+  align(align = "center", j = c("Lag", "Cases", "OR", "P"), part = "all") %>%
+  align(align = "left", j = c("Region", "Variable"), part = "all") %>%
+  merge_v(j = c("Region", "Lag", "Cases")) %>%
+  border_remove() %>%
+  hline_top(border = fp_border(color = "black", width = 1.5)) %>%
+  hline_bottom(border = fp_border(color = "black", width = 1.5)) %>%
+  hline(border = fp_border(color = "gray80", width = 0.5, style = "dashed")) %>%
+  hline(i = seq(2, nrow(two_model_results), by = 2), border = fp_border(color = "black", width = 1.0)) %>%
+  set_header_labels(Region = "Study Region", Lag = "Lag Window", Cases = "Cases (N)", Variable = "Exposure Parameter", OR = "Odds Ratio (95% CI)", P = "p-value") %>%
+  bold(i = which(two_model_results$sig), j = c("OR", "P")) %>%
+  autofit()
+
+doc_output <- read_docx() %>%
+  body_add_par("Table X.X: Multivariate Case-Crossover Odds Ratios Matched by Study Region and Lag Windows", style = "heading 1") %>%
+  body_add_flextable(ft_table) %>%
+  body_add_par("\nNote: Bold entries indicate statistical significance at the p < 0.05 level.", style = "Normal") %>%
+  body_add_par("1. SST evaluates the threshold effect for every 1°C increase above 18°C.", style = "Normal") %>%
+  body_add_par("2. Salinity evaluates a localized continuous z-score scale. An Odds Ratio < 1.0 signifies that decreasing salinity increases the relative risk of infection.", style = "Normal")
+
+print(doc_output, target = "MSc_Thesis_Table_TwoModel_Results.docx")
+cat("\nSuccess! Saved your main threshold regression table and forest plot to your directory.\n")
+
+#@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@
+# 11. GAM plots to show interaction between SST and SSS
+#@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@
+
+#using most significant lag day for each area 
+
+# CADIZ (LAG 1) 
+cadiz_sst <- cc_master_sst %>% filter(area == "cadiz") %>% mutate(SST_var = lag(SST_lag0, 1))
+cadiz_sss <- cc_master_sss %>% filter(area == "cadiz") %>% mutate(SSS_var = lag(SSS_lag0, 1))
+cadiz_ids <- intersect(cadiz_sst$id, cadiz_sss$id)
+
+cadiz_data <- cadiz_sss %>% filter(id %in% cadiz_ids) %>% arrange(id, isb)
+cadiz_data$SST_raw <- (cadiz_sst %>% filter(id %in% cadiz_ids) %>% arrange(id, isb))$SST_var
+
+model_cadiz <- gam(isb ~ te(SST_raw, SSS_var, k = 3) + s(id, bs = "re"), 
+                   data = cadiz_data, family = binomial, method = "REML")
+
+grid_cadiz <- expand.grid(
+  SST = seq(min(cadiz_data$SST_raw, na.rm=T), max(cadiz_data$SST_raw, na.rm=T), length.out = 100),
+  Salinity = seq(min(cadiz_data$SSS_var, na.rm=T), max(cadiz_data$SSS_var, na.rm=T), length.out = 100)
+)
+grid_cadiz$lp <- predict(model_cadiz, newdata = data.frame(SST_raw = grid_cadiz$SST, SSS_var = grid_cadiz$Salinity, id = cadiz_data$id[1]), type = "link")
+grid_cadiz$OR <- exp(grid_cadiz$lp - mean(grid_cadiz$lp))
+
+
+#CHARENTE-MARITIME (LAG 3)
+cm_sst <- cc_master_sst %>% filter(area == "charente-maritime") %>% mutate(SST_var = lag(SST_lag0, 3))
+cm_sss <- cc_master_sss %>% filter(area == "charente-maritime") %>% mutate(SSS_var = lag(SSS_lag0, 3))
+cm_ids <- intersect(cm_sst$id, cm_sss$id)
+
+cm_data <- cm_sss %>% filter(id %in% cm_ids) %>% arrange(id, isb)
+cm_data$SST_raw <- (cm_sst %>% filter(id %in% cm_ids) %>% arrange(id, isb))$SST_var
+
+# FIX: Added method = "REML"
+model_cm <- gam(isb ~ te(SST_raw, SSS_var, k = 3) + s(id, bs = "re"), 
+                data = cm_data, family = binomial, method = "REML")
+
+grid_cm <- expand.grid(
+  SST = seq(min(cm_data$SST_raw, na.rm=T), max(cm_data$SST_raw, na.rm=T), length.out = 100),
+  Salinity = seq(min(cm_data$SSS_var, na.rm=T), max(cm_data$SSS_var, na.rm=T), length.out = 100)
+)
+grid_cm$lp <- predict(model_cm, newdata = data.frame(SST_raw = grid_cm$SST, SSS_var = grid_cm$Salinity, id = cm_data$id[1]), type = "link")
+grid_cm$OR <- exp(grid_cm$lp - mean(grid_cm$lp))
+
+
+# STOCKHOLM (LAG 2) 
+stkh_sst <- cc_master_sst %>% filter(area == "stockholm") %>% mutate(SST_var = lag(SST_lag0, 2))
+stkh_sss <- cc_master_sss %>% filter(area == "stockholm") %>% mutate(SSS_var = lag(SSS_lag0, 2))
+stkh_ids <- intersect(stkh_sst$id, stkh_sss$id)
+
+stkh_data <- stkh_sss %>% filter(id %in% stkh_ids) %>% arrange(id, isb)
+stkh_data$SST_raw <- (stkh_sst %>% filter(id %in% stkh_ids) %>% arrange(id, isb))$SST_var
+
+# FIX: Added method = "REML"
+model_stkh <- gam(isb ~ te(SST_raw, SSS_var, k = 3) + s(id, bs = "re"), 
+                  data = stkh_data, family = binomial, method = "REML")
+
+grid_stkh <- expand.grid(
+  SST = seq(min(stkh_data$SST_raw, na.rm=T), max(stkh_data$SST_raw, na.rm=T), length.out = 100),
+  Salinity = seq(min(stkh_data$SSS_var, na.rm=T), max(stkh_data$SSS_var, na.rm=T), length.out = 100)
+)
+grid_stkh$lp <- predict(model_stkh, newdata = data.frame(SST_raw = grid_stkh$SST, SSS_var = grid_stkh$Salinity, id = stkh_data$id[1]), type = "link")
+grid_stkh$OR <- exp(grid_stkh$lp - mean(grid_stkh$lp))
+
+
+#creation of GAM plot
+
+library(ggplot2)
+
+render_gam_surface <- function(grid_data, title_text, filename_text) {
+  grid_data$OR_capped <- ifelse(grid_data$OR > 20, 20.1, grid_data$OR)
+  grid_data$OR_group  <- cut(grid_data$OR_capped,
+                             breaks = c(0, 1.0, 1.5, 2.0, 3.0, 5.0, 7.0, 10.0, 15.0, 20.0, Inf),
+                             labels = c("(0.0, 1.0]", "(1.0, 1.5]", "(1.5, 2.0]", "(2.0, 3.0]",
+                                        "(3.0, 5.0]", "(5.0, 7.0]", "(7.0, 10.0]", "(10.0, 15.0]",
+                                        "(15.0, 20.0]", "(20.0, Inf]"), include.lowest = TRUE)
+  
+  p <- ggplot(grid_data, aes(x = Salinity, y = SST)) +
+    geom_tile(aes(fill = OR_group)) +
+    scale_fill_viridis_d(option = "magma", name = "Predicted OR", drop = TRUE) + 
+    scale_x_reverse() +
+    labs(title = title_text, x = "Salinity (psu) — Decreasing →", y = "SST (°C)") +
+    theme_bw() + 
+    theme(panel.grid.major = element_blank(), panel.grid.minor = element_blank(),
+          plot.title = element_text(face = "bold", size = 11))
+  
+  ggsave(filename = filename_text, plot = p, width = 6, height = 5, dpi = 300)
+}
+
+# Overwriting your images with correct lag text descriptions
+render_gam_surface(grid_cadiz, "A  CADIZ (Lag 1) — Smooth Bivariate GAM Surface", "GAM_Surface_Cadiz.png")
+render_gam_surface(grid_cm, "B  CHARENTE-MARITIME (Lag 0) — Smooth Bivariate GAM Surface", "GAM_Surface_Charente_Maritime.png")
+render_gam_surface(grid_stkh, "C  STOCKHOLM (Lag 3) — Smooth Bivariate GAM Surface", "GAM_Surface_Stockholm.png")
+
+cat("\nDone! All three final plots re-saved with matching lag titles.\n")
+
+#___________________________________________________________________________
+#@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@
+# 13. Pmean Logistic Model, Case-Crossover Design: Tables and Plots
+#@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@
+
+# 1. Load libraries
+library(dplyr)
+library(survival)
+library(ggplot2)
+library(officer)
+library(flextable)
+
+# 2. Lags 
+continuous_weather <- cc_master_pmean %>% 
+  distinct(area, date, Pmean) %>%
+  arrange(area, date) %>%
+  group_by(area) %>%
+  mutate(
+    Pmean_lag0 = Pmean,
+    Pmean_lag1 = dplyr::lag(Pmean, n = 1),
+    Pmean_lag2 = dplyr::lag(Pmean, n = 2),
+    Pmean_lag3 = dplyr::lag(Pmean, n = 3)
+  ) %>%
+  ungroup() %>%
+  select(-Pmean)
+
+# Map lags to cases
+cc_clean_pmean <- cc_master_pmean %>% 
+  select(id, area, isb, date) %>% 
+  left_join(continuous_weather, by = c("area", "date"))
+
+# 3. Loops, data outputs
+target_lags         <- c("lag0", "lag1", "lag2", "lag3")
+unique_areas        <- c("cadiz", "charente-maritime", "stockholm")
+pmean_model_results <- data.frame()
+forest_results      <- data.frame() 
+
+format_p <- function(p) {
+  if (is.na(p)) return("-")
+  if (p < 0.001) return("< 0.001")
+  return(sprintf("%.3f", round(p, 3)))
+}
+
+# 4. Run Stratified lag loops across regions
+for (current_area in unique_areas) {
+  for (lag_name in target_lags) {
+    
+    target_var <- paste0("Pmean_", lag_name)
+    
+    # keep only fully-matched case-control strata
+    pmean_final <- cc_clean_pmean %>% 
+      filter(area == current_area & !is.na(.data[[target_var]]) & !is.na(id)) %>%
+      group_by(id) %>% 
+      filter(any(isb == 1) & any(isb == 0)) %>% 
+      ungroup()
+    
+    if (nrow(pmean_final) < 10) next
+    
+    #  count cases 
+    actual_case_count <- sum(pmean_final$isb == 1, na.rm = TRUE)
+    
+    # use per 1 SD change
+    pmean_final$scaled_pmean <- as.numeric(scale(pmean_final[[target_var]]))
+    
+    # Fit Conditional Logistic Regression Model
+    mod_pmean <- clogit(isb ~ scaled_pmean + strata(id), data = pmean_final)
+    sum_pmean <- summary(mod_pmean)$coefficients
+    
+    b_pmean   <- sum_pmean["scaled_pmean", "coef"]
+    se_pmean  <- sum_pmean["scaled_pmean", "se(coef)"]
+    p_raw     <- sum_pmean["scaled_pmean", "Pr(>|z|)"]
+    
+    # Calculate Estimates
+    or_val    <- exp(b_pmean)
+    ci_lower  <- exp(b_pmean - 1.96 * se_pmean)
+    ci_upper  <- exp(b_pmean + 1.96 * se_pmean)
+    
+    or_txt    <- paste0(round(or_val, 2), " (", round(ci_lower, 2), ", ", round(ci_upper, 2), ")")
+    p_txt     <- format_p(p_raw)
+    
+    # Plotting
+    forest_results <- rbind(forest_results, data.frame(
+      Region = toupper(current_area), Lag = toupper(lag_name), 
+      OR = or_val, lower = ci_lower, upper = ci_upper
+    ))
+    
+    # Word Table
+    pmean_model_results <- rbind(pmean_model_results, data.frame(
+      Region = toupper(current_area), Lag = toupper(lag_name), Cases = actual_case_count, 
+      Variable = "Pmean (Continuous 1 SD)", OR = or_txt, P = p_txt, sig = p_raw < 0.05
+    ))
+  }
+}
+
+# 5.  Forest Plot
+forest_results$Lag <- factor(forest_results$Lag, levels = rev(c("LAG0", "LAG1", "LAG2", "LAG3")))
+
+p_master_forest <- ggplot(forest_results, aes(x = OR, y = Lag, xmin = lower, xmax = upper)) +
+  geom_vline(xintercept = 1, linetype = "dashed", color = "gray50", linewidth = 0.8) +
+  geom_errorbarh(color = "#1f4e79", height = 0.2, linewidth = 1) +
+  geom_point(color = "#1f4e79", size = 3) +
+  facet_grid(. ~ Region, scales = "free_x") + # Dynamically scales X axis so nothing is cut off
+  labs(
+    title = "Univariate Case-Crossover Precipitation (Pmean) Odds Ratios",
+    subtitle = "Regional environmental effect parameters across temporal lag structures",
+    x = "Odds Ratio (95% Confidence Interval)", y = "Exposure Lag Window"
+  ) +
+  theme_minimal(base_family = "Times New Roman", base_size = 12) +
+  theme(panel.spacing = unit(1.5, "lines"))
+
+ggsave("MSc_Thesis_Figure_Pmean_Only_ForestPlot.png", plot = p_master_forest, width = 10, height = 5, dpi = 300)
+
+# 6.  Word Table
+ft_table <- flextable(pmean_model_results %>% select(-sig)) %>%
+  font(fontname = "Times New Roman", part = "all") %>%
+  fontsize(size = 11, part = "all") %>%
+  bold(part = "header") %>%
+  align(align = "center", j = c("Lag", "Cases", "OR", "P"), part = "all") %>%
+  align(align = "left", j = c("Region", "Variable"), part = "all") %>%
+  merge_v(j = c("Region", "Cases")) %>%
+  border_remove() %>%
+  hline_top(border = fp_border(color = "black", width = 1.5)) %>%
+  hline_bottom(border = fp_border(color = "black", width = 1.5)) %>%
+  hline(border = fp_border(color = "gray80", width = 0.5)) %>%
+  set_header_labels(Region = "Study Region", Lag = "Lag Window", Cases = "Cases (N)", 
+                    Variable = "Exposure Parameter", OR = "Odds Ratio (95% CI)", P = "p-value") %>%
+  bold(i = which(pmean_model_results$sig), j = c("OR", "P")) %>%
+  autofit()
+
+doc_output <- read_docx() %>%
+  body_add_par("Table X.X: Stratified Single-Variable Case-Crossover Odds Ratios for Precipitation Across Lags", style = "heading 1") %>%
+  body_add_flextable(ft_table) %>%
+  body_add_par("\nNote: Bold entries indicate statistical significance at the p < 0.05 level.", style = "Normal") %>%
+  body_add_par("1. Pmean variables are locally standardized to a continuous Z-score scale representing risk change per 1 Standard Deviation (SD) increase.", style = "Normal")
+
+print(doc_output, target = "MSc_Thesis_Table_Pmean_Only_Results.docx")
+
+# 
+print(p_master_forest)
+ft_table
+
+#Define how much a 1SD change in pmean is for each area
+
+library(dplyr)
+
+# Calculate the exact average and 1 SD in millimetres for your dataset
+regional_rainfall_metrics <- cc_master_pmean %>%
+  group_by(area) %>%
+  summarise(
+    Average_Rain_mm   = round(mean(Pmean, na.rm = TRUE), 2),
+    One_SD_Value_mm   = round(sd(Pmean, na.rm = TRUE), 2)
+  ) %>%
+  ungroup()
+
+print(regional_rainfall_metrics)
 
