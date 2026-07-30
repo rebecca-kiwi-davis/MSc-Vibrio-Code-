@@ -1,11 +1,13 @@
-# 1. Automated Package Check & Load
+#All years epi-curve line plot
+
+# 1. Load packages
 if (!require("tidyverse")) install.packages("tidyverse")
 if (!require("viridis")) install.packages("viridis")
 
 library(tidyverse)
 library(viridis)
 
-# 2. Read CSV file
+# 2. CSV file
 Outcome.Data.Vibrio <- read.csv("Outcome Data Vibrio.csv", stringsAsFactors = FALSE)
 
 # 3. Clean data
@@ -24,7 +26,7 @@ complete_grid <- expand_grid(
   Month_num = 1:12
 )
 
-# 5. Calculate monthly case counts per year
+# 5. Calculate monthly case counts each year 
 plot_counts <- cleaned_data %>%
   count(area, Year_num, Month_num, name = "case_counts") %>%
   right_join(complete_grid, by = c("area", "Year_num", "Month_num")) %>%
@@ -147,3 +149,155 @@ print(epi_curve_plot)
 
 # Export
 ggsave("vibrio_epi_curves_final_professional.png", width = 13, height = 12, dpi = 300)
+
+
+#seasonal trends all years combined epi curve line plot
+
+# 1. Load packages
+if (!require("tidyverse")) install.packages("tidyverse")
+if (!require("ggnewscale")) install.packages("ggnewscale") 
+
+library(tidyverse)
+library(ggnewscale)
+
+# 2. Read case data
+Outcome.Data.Vibrio <- read.csv("Outcome Data Vibrio.csv", stringsAsFactors = FALSE)
+
+# 3. Clean and fix names
+cleaned_data <- Outcome.Data.Vibrio %>%
+  filter(!is.na(year) & !is.na(month) & !is.na(area)) %>%
+  mutate(
+    Year_num  = as.numeric(as.character(year)),
+    Month_num = as.numeric(as.character(month)),
+    #"Cadiz" spelling 
+    area = str_replace(area, "Cadiz", "Cádiz")
+  ) %>%
+  filter(Month_num >= 1 & Month_num <= 12) %>%
+  # Use one year to create a single 12-month timeline axis
+  mutate(plot_date = make_date(year = 2020, month = Month_num, day = 1)) %>%
+  filter(!is.na(plot_date))
+
+# 4. Create a complete grid to ensure months with 0 cases are still plotted
+complete_grid <- expand_grid(
+  area = unique(cleaned_data$area),
+  plot_date = make_date(year = 2020, month = 1:12, day = 1)
+)
+
+# Combine all years together for each month by each area, filling in the zeros
+plot_counts <- cleaned_data %>%
+  count(area, plot_date, name = "case_counts") %>%
+  right_join(complete_grid, by = c("area", "plot_date")) %>%
+  mutate(case_counts = replace_na(case_counts, 0))
+
+# Extend the plot to the edges
+edge_left <- expand_grid(
+  area = unique(plot_counts$area),
+  plot_date = make_date(2019, 12, 15),
+  case_counts = 0
+)
+
+edge_right <- expand_grid(
+  area = unique(plot_counts$area),
+  plot_date = make_date(2020, 12, 31),
+  case_counts = 0
+)
+
+# Ensure lines go back down to zero at borders as 0 cases
+plot_counts <- bind_rows(plot_counts, edge_left, edge_right) %>%
+  arrange(area, plot_date)
+
+
+seasons_df <- data.frame(
+  xmin = make_date(2020, c(1, 3, 6, 9, 12), 1),
+  xmax = make_date(2020, c(3, 6, 9, 12, 12), 1), # Links directly to the start of the next phase
+  Season = factor(c("Winter", "Spring", "Summer (Risk Peak)", "Autumn", "Winter"),
+                  levels = c("Winter", "Spring", "Summer (Risk Peak)", "Autumn"))
+)
+
+seasons_df$xmin[1] <- make_date(2019, 12, 15)
+seasons_df$xmax[5] <- make_date(2020, 12, 31)
+
+# 5. Create Epicurve
+epi_curve_plot <- ggplot() +
+  
+  # Map the background panels to the season key
+  geom_rect(data = seasons_df, aes(xmin = xmin, xmax = xmax, ymin = -Inf, ymax = Inf, fill = Season),
+            color = NA, alpha = 1) +
+  scale_fill_manual(
+    values = c(
+      "Winter"             = "gray96", 
+      "Spring"             = "gray88", 
+      "Summer" = "gray65", 
+      "Autumn"             = "gray78"
+    ),
+    name = "Season Shading Key"
+  ) +
+  
+  
+  new_scale_color() +
+  
+  # 4 line colours represent each area over the timeline
+  geom_line(data = plot_counts, aes(x = plot_date, y = case_counts, group = area, color = area), linewidth = 1.3) +
+  
+  #  draw dots for actual data months
+  geom_point(data = filter(plot_counts, plot_date != make_date(2019, 12, 15) & plot_date != make_date(2020, 12, 31)), 
+             aes(x = plot_date, y = case_counts, color = area), size = 2) + 
+  
+  # Format the timeline 
+  scale_x_date(
+    breaks = make_date(2020, c(1, 4, 7, 10), 1),
+    labels = c("Jan", "Apr", "Jul", "Oct"),
+    limits = c(make_date(2019, 12, 15), make_date(2020, 12, 31)),
+    expand = c(0, 0)
+  ) +
+  
+  # Y axis scale 
+  scale_y_continuous(
+    expand = expansion(mult = c(0.02, 0.1))
+  ) +
+  
+  # Colours
+  scale_color_manual(
+    values = c(
+      "Arcachon"          = "#E41A1C", 
+      "Cádiz"             = "#377EB8", 
+      "Charente-Maritime" = "#4DAF4A", 
+      "Stockholm"         = "#984EA3"
+    ),
+    name = "Geographic Area"
+  ) +
+  
+  # Layout 
+  theme_bw() +
+  theme(
+    axis.text.x = element_text(angle = 45, hjust = 1, size = 10, color = "black"),
+    axis.text.y = element_text(size = 10, color = "black"),
+    
+    panel.grid.major.x = element_blank(),
+    panel.grid.minor.x = element_blank(),
+    
+    # Legend format
+    legend.position = "right",
+    legend.box = "vertical",
+    legend.title = element_text(face = "bold", size = 11),
+    legend.text = element_text(size = 10),
+    legend.key = element_rect(color = "gray85"), 
+    
+    # Text 
+    plot.title = element_text(face = "bold", size = 16, margin = margin(b = 10)),
+    plot.caption = element_text(hjust = 0, size = 10, face = "plain", margin = margin(t = 15))
+  ) +
+  
+  #  labels
+  labs(
+    title = "Seasonal Distribution of locally acquired non-cholera Vibrio cases\n(2010–2025 combined) by geographic area",
+    x = "Month of Year",
+    y = "Total Combined Case Counts",
+    caption = "Figure 2: Combined monthly distribution of locally acquired non-cholera vibrio case admissions, notified between 2010 and 2025.\nData is combined across all study years to compare regional seasonality profiles on a single axis.\nShading panels define four seasons (dark grey field = June–August, summer risk peak)."
+  )
+
+# show the plot
+print(epi_curve_plot)
+
+# Export 
+ggsave("line_plot_seasonal_vibrio_cases_2010_2025.png", width = 11, height = 7, dpi = 300)
