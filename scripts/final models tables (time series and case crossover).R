@@ -73,7 +73,7 @@ for (current_area in unique_areas) {
   }
 }
 
-# 2. Put results in table
+# 2. Put results in table, p-value adjustment
 cc_univar_results <- do.call(rbind, cc_univar_raw) %>%
   mutate(
     Region   = factor(Region, levels = c("CADIZ", "CHARENTE-MARITIME", "STOCKHOLM", "ARCACHON")),
@@ -86,13 +86,13 @@ cc_univar_results <- do.call(rbind, cc_univar_raw) %>%
     ))
   ) %>%
   arrange(Region, Variable, Lag) %>%
-  group_by(Region, Variable) %>%                                # <-- FIX: Prevents global pooling artifacts
+  group_by(Region) %>%                                          # <-- CHANGED: region-level FDR family
   mutate(p_adjusted = p.adjust(p_raw, method = "BH")) %>%
   ungroup() %>%
   mutate(
     OR_CI         = paste0(sprintf("%.2f", exp(b)), " (", sprintf("%.2f", exp(b - 1.96*se)), ", ", sprintf("%.2f", exp(b + 1.96*se)), ")"),
-    P_Raw_Display = sapply(p_raw, format_p),                     # <-- NEW: Track raw statistics
-    P_FDR_Display = sapply(p_adjusted, format_p),                # <-- NEW: Track adjusted statistics
+    P_Raw_Display = sapply(p_raw, format_p),
+    P_FDR_Display = sapply(p_adjusted, format_p),
     sig           = p_adjusted < 0.05
   )
 
@@ -194,7 +194,7 @@ for (current_area in unique_areas) {
   }
 }
 
-#define areas
+#define areas and adjustment of p-value
 triple_model_output = triple_model_output %>%
   mutate(
     Region   = factor(Region, levels = c("CADIZ", "CHARENTE-MARITIME", "STOCKHOLM", "ARCACHON")),
@@ -203,7 +203,7 @@ triple_model_output = triple_model_output %>%
     ))
   ) %>%
   arrange(Region, Variable, Lag) %>%
-  group_by(Region, Variable) %>%                                # <-- Local FDR Stratification
+  group_by(Region) %>%                                          # <-- CHANGED: region-level FDR family
   mutate(p_adjusted = p.adjust(p_raw, method = "BH")) %>%
   ungroup() %>%
   mutate(
@@ -288,6 +288,7 @@ for (current_area in ts_areas) {
   }
 }
 
+#p-value correction
 ts_screen_results <- do.call(rbind, ts_screen_raw) %>%
   mutate(
     Region   = factor(Region, levels = c("CADIZ", "CHARENTE-MARITIME", "STOCKHOLM", "ARCACHON")),
@@ -296,7 +297,7 @@ ts_screen_results <- do.call(rbind, ts_screen_raw) %>%
     ))
   ) %>%
   arrange(Region, Exposure, Lag) %>%
-  group_by(Region, Exposure) %>%                                # <-- Local FDR Stratification
+  group_by(Region) %>%                                          # <-- CHANGED: region-level FDR family
   mutate(p_adjusted = p.adjust(p_raw, method = "BH")) %>%
   ungroup() %>%
   mutate(
@@ -374,6 +375,7 @@ for (current_area in ts_areas) {
   }
 }
 
+#p-value adjusted
 ts_adjusted_results <- do.call(rbind, ts_adjusted_raw) %>%
   mutate(
     Region   = factor(Region, levels = c("CADIZ", "CHARENTE-MARITIME", "STOCKHOLM", "ARCACHON")),
@@ -382,7 +384,7 @@ ts_adjusted_results <- do.call(rbind, ts_adjusted_raw) %>%
     ))
   ) %>%
   arrange(Region, Exposure, Lag) %>%
-  group_by(Region, Exposure) %>%                                # <-- Local FDR Stratification
+  group_by(Region) %>%                                          # <-- CHANGED: region-level FDR family
   mutate(p_adjusted = p.adjust(p_raw, method = "BH")) %>%
   ungroup() %>%
   mutate(
