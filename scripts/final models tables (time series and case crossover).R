@@ -411,3 +411,92 @@ doc_ts_adjusted <- read_docx() %>%
   body_add_par("\nNote: Each lag is evaluated within its own independent model with FDR corrections run locally within specific region-by-exposure metrics.", style = "Normal")
 print(doc_ts_adjusted, target = "MSc_Thesis_Table_TimeSeries_Adjusted_LOCAL_FDR.docx")
 cat("\n[SUCCESS]: All 4 updated model blocks have completed execution successfully!\n")
+
+#lag plots
+#@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@
+# PLOT: Mutually Adjusted Area-Specific Lag-Response Curves (Lags 0-3)
+#@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@
+
+library(dplyr)
+library(ggplot2)
+library(gridExtra)
+
+# 1. Reuse the exact clean dataframe generated during your Model 4 run
+# We harvest the data directly from the 'ts_adjusted_results' output table
+if (!exists("ts_adjusted_results")) {
+  stop("Please run the Model 4 script first to generate 'ts_adjusted_results'.")
+}
+
+# Ensure correct factor levels for clean plotting layout
+plot_data <- ts_adjusted_results %>%
+  mutate(
+    # Strip "Lag " string to get numeric values for the X-axis
+    Lag_Numeric = as.numeric(gsub("Lag ", "", Lag)),
+    # Extract lower and upper 95% CI bounds mathematically from b and se
+    RR       = exp(b),
+    RR_Lower = exp(b - 1.96 * se),
+    RR_Upper = exp(b + 1.96 * se),
+    # Prettify labels for plot facets
+    Exposure_Short = case_when(
+      Exposure == "SST (>18°C Threshold, per 1°C increase)" ~ "SST (>18°C)",
+      Exposure == "Sea Surface Salinity (Continuous 1 SD increase)" ~ "Salinity (1 SD)",
+      Exposure == "Precipitation (Continuous 1 SD increase)" ~ "Precipitation (1 SD)",
+      TRUE ~ as.character(Exposure)
+    )
+  )
+
+# 2. Plotting Function for Consistent Styling Across Regions
+generate_lag_curve <- function(data_subset, region_title) {
+  ggplot(data_subset, aes(x = Lag_Numeric, y = RR, group = Exposure_Short, color = Exposure_Short)) +
+    # Reference line at RR = 1.0 (No Risk Change)
+    geom_hline(yintercept = 1.0, linetype = "dashed", color = "gray50", size = 0.6) +
+    # Confidence intervals represented by shaded ribbons
+    geom_ribbon(aes(ymin = RR_Lower, ymax = RR_Upper, fill = Exposure_Short), alpha = 0.15, color = NA) +
+    # Main continuous trend lines
+    geom_line(size = 1.1) +
+    # Exact point estimates per discrete lag
+    geom_point(size = 2) +
+    # Dynamic grid layout splitting the three mutually adjusted predictors
+    facet_wrap(~Exposure_Short, scales = "free_y", ncol = 3) +
+    # Aesthetic adjustments
+    scale_x_continuous(breaks = 0:3, labels = c("Lag 0", "Lag 1", "Lag 2", "Lag 3")) +
+    labs(
+      title = paste("Mutually Adjusted Lag-Response Curves:", region_title),
+      x = "Exposure Lag Time",
+      y = "Rate Ratio (95% CI)"
+    ) +
+    theme_minimal(base_family = "Times New Roman", base_size = 11) +
+    theme(
+      plot.title        = element_text(face = "bold", size = 12, hjust = 0.5),
+      strip.background  = element_rect(fill = "gray95", color = "gray80"),
+      strip.text        = element_text(face = "bold", color = "black"),
+      legend.position   = "none", # Legend omitted since facets are self-explanatory
+      panel.grid.minor  = element_blank(),
+      panel.border      = element_rect(color = "gray80", fill = NA, size = 0.8)
+    )
+}
+
+# 3. Generate individual plots for the 4 distinct regions
+plots_list <- list()
+for (current_area in unique(plot_data$Region)) {
+  area_df <- plot_data %>% filter(Region == current_area)
+  plots_list[[current_area]] <- generate_lag_curve(area_df, current_area)
+}
+
+# 4. Save each plot as a high-resolution image for your thesis layout
+# Saves a unified layout configuration per area block
+for (current_area in names(plots_list)) {
+  file_name <- paste0("MSc_Thesis_LagResponse_Mutually_Adjusted_", current_area, ".png")
+  ggsave(
+    filename = file_name,
+    plot = plots_list[[current_area]],
+    width = 8.5,
+    height = 3.5,
+    dpi = 300
+  )
+}
+
+# 5. Display the plots sequentially in your R studio window
+grid.arrange(grobs = plots_list, ncol = 1)
+cat("\n[SUCCESS]: Mutually adjusted lag-response plots saved for all 4 study regions!\n")
+
